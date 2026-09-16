@@ -31,21 +31,20 @@ env/
 *.ipynb_checkpoints
 
 # Data (large files, don't commit)
-data/raw/*
-data/processed/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep
-
-# Results (regeneratable)
-results/*
-!results/.gitkeep
+data/
+results/
 
 # Secrets & Config
 .env
 *.env
+.secrets/*.json
+.secrets/*.txt
+.secrets/*.key
+.secrets/*.pem
 config/api_keys.py
 config/secrets.py
 config/local_*.py
+config/local_*.json
 
 # IDE
 .vscode/
