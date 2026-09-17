@@ -3,18 +3,20 @@
 A股全量历史数据下载脚本（Baostock）
 
 特性：
-- 全量A股（含已退市），日线数据，1990年至今
-- 防限流：单只股票间隔 2-3 秒
+- 支持日线（36年完整）和5分钟线（最近几年）两种频率
+- 全量A股（含已退市），防限流：单只股票间隔 2-3 秒
 - 断点续传：状态文件记录已下载股票，中断后从断点继续
 - 增量更新：--incremental 只下载上次更新后的新数据
 - 数据质量检查：--check 统计覆盖率、缺失、异常
-- 数据目录：data/raw/daily/（按交易所分子目录）
+- 数据目录：data/raw/daily/ 和 data/raw/minute/（按交易所分子目录）
 
 用法：
-  python scripts/download_data.py              # 全量下载（断点续传）
-  python scripts/download_data.py --incremental # 增量更新（只下载新数据）
-  python scripts/download_data.py --check       # 数据质量检查
-  python scripts/download_data.py --stock sh.600519  # 只下载指定股票（调试用）
+  python scripts/download_data.py                     # 全量下载日线（断点续传）
+  python scripts/download_data.py --freq minute       # 全量下载5分钟线
+  python scripts/download_data.py --incremental        # 日线增量更新
+  python scripts/download_data.py --freq minute --incremental  # 分钟线增量更新
+  python scripts/download_data.py --check              # 数据质量检查
+  python scripts/download_data.py --stock sh.600519   # 只下载指定股票（调试用）
 """
 
 import baostock as bs
@@ -23,6 +25,7 @@ import os
 import sys
 import time
 import json
+import signal
 import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -30,21 +33,47 @@ from pathlib import Path
 # ============ 配置 ============
 
 PROJECT_ROOT = Path(__file__).parent.parent
-DATA_DIR = PROJECT_ROOT / "data" / "raw" / "daily"
 WORKSPACE_DIR = PROJECT_ROOT / "data" / "_workspace"
-STATUS_FILE = WORKSPACE_DIR / "download_status.json"
+
+# 频率配置：数据目录、状态文件、字段、起始日期
+FREQ_CONFIG = {
+    "daily": {
+        "data_dir": PROJECT_ROOT / "data" / "raw" / "daily",
+        "status_file": WORKSPACE_DIR / "download_status_daily.json",
+        "fields": "date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,peTTM,pbMRQ,psTTM,pcfNcfTTM,isST",
+        "frequency": "d",
+        "start_date": "1990-12-19",  # A股开市
+        "label": "日线",
+    },
+    "minute": {
+        "data_dir": PROJECT_ROOT / "data" / "raw" / "minute",
+        "status_file": WORKSPACE_DIR / "download_status_minute.json",
+        "fields": "date,time,code,open,high,low,close,volume,amount,adjustflag",
+        "frequency": "5",  # 5分钟线（Baostock最细粒度）
+        "start_date": "2006-01-01",  # Baostock分钟线最早约2006年
+        "label": "5分钟线",
+    },
+}
+
+# 股票列表缓存（日线和分钟线共用同一份股票列表）
 STOCK_LIST_FILE = WORKSPACE_DIR / "stock_list.csv"
 LOG_FILE = WORKSPACE_DIR / "download.log"
-
-# Baostock 日线字段
-DAILY_FIELDS = "date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,peTTM,pbMRQ,psTTM,pcfNcfTTM,isST"
 
 # 防限流：单只股票间隔（秒）
 REQUEST_INTERVAL_MIN = 2.0
 REQUEST_INTERVAL_MAX = 3.0
 
-# 起始日期（A股1990年12月开市）
-START_DATE = "1990-12-19"
+# 单只股票下载超时（秒），防止 Baostock 挂起导致进程卡死
+DOWNLOAD_TIMEOUT = 300  # 5分钟
+
+
+class DownloadTimeout(Exception):
+    """下载超时异常"""
+    pass
+
+
+def _timeout_handler(signum, frame):
+    raise DownloadTimeout("Baostock 下载超时")
 
 # ============ 工具函数 ============
 
@@ -57,19 +86,22 @@ def log(msg):
         f.write(line + "\n")
 
 
-def ensure_dirs():
+def ensure_dirs(freq):
     """确保目录存在"""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-    # 按交易所分子目录
-    (DATA_DIR / "sh").mkdir(exist_ok=True)
-    (DATA_DIR / "sz").mkdir(exist_ok=True)
+    freqs = ["daily", "minute"] if freq == "both" else [freq]
+    for f in freqs:
+        data_dir = FREQ_CONFIG[f]["data_dir"]
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "sh").mkdir(exist_ok=True)
+        (data_dir / "sz").mkdir(exist_ok=True)
 
 
-def load_status():
+def load_status(freq):
     """加载下载状态"""
-    if STATUS_FILE.exists():
-        with open(STATUS_FILE, "r", encoding="utf-8") as f:
+    status_file = FREQ_CONFIG[freq]["status_file"]
+    if status_file.exists():
+        with open(status_file, "r", encoding="utf-8") as f:
             return json.load(f)
     return {
         "started_at": None,
@@ -82,17 +114,21 @@ def load_status():
     }
 
 
-def save_status(status):
+def save_status(freq, status):
     """保存下载状态"""
+    status_file = FREQ_CONFIG[freq]["status_file"]
     status["updated_at"] = datetime.now().isoformat()
-    with open(STATUS_FILE, "w", encoding="utf-8") as f:
+    with open(status_file, "w", encoding="utf-8") as f:
         json.dump(status, f, ensure_ascii=False, indent=2)
 
 
-def sleep_interval():
-    """防限流：随机间隔 2-3 秒"""
+def sleep_interval(freq):
+    """防限流：随机间隔。分钟线用更大间隔避免与日线进程叠加限流。"""
     import random
-    time.sleep(random.uniform(REQUEST_INTERVAL_MIN, REQUEST_INTERVAL_MAX))
+    if freq == "minute":
+        time.sleep(random.uniform(5.0, 6.0))
+    else:
+        time.sleep(random.uniform(REQUEST_INTERVAL_MIN, REQUEST_INTERVAL_MAX))
 
 
 def get_stock_list():
@@ -122,42 +158,93 @@ def get_stock_list():
     df = pd.concat([df_sh, df_sz], ignore_index=True)
     # 只保留股票（code 以 sh.6 / sz.0 / sz.3 开头），排除指数和基金
     df = df[df["code"].str.match(r"^(sh\.6|sz\.0|sz\.3)")]
-    df = df.sort_values("code").reset_index(drop=True)
+    # 排除科创板（sh.688）——用户明确不需要
+    df = df[~df["code"].str.startswith("sh.688")]
+    # 去重（同一股票可能有多条状态记录）
+    df = df.drop_duplicates(subset=["code"]).sort_values("code").reset_index(drop=True)
 
     df.to_csv(STOCK_LIST_FILE, index=False, encoding="utf-8")
     log(f"股票列表已保存：{len(df)} 只股票")
     return df
 
 
-def download_one_stock(code, start_date, end_date):
-    """下载单只股票的日线数据"""
-    rs = bs.query_history_k_data_plus(
-        code,
-        DAILY_FIELDS,
-        start_date=start_date,
-        end_date=end_date,
-        frequency="d",
-        adjustflag="2",  # 2=前复权
-    )
-
-    if rs.error_code != '0':
-        raise Exception(f"Baostock error: {rs.error_code} - {rs.error_msg}")
-
-    data_list = []
-    while rs.next():
-        data_list.append(rs.get_row_data())
-
-    if not data_list:
-        return None
-
-    df = pd.DataFrame(data_list, columns=rs.fields)
-    return df
+def baostock_reconnect():
+    """Baostock 断线重连：先退出再重新登录"""
+    try:
+        bs.logout()
+    except Exception:
+        pass
+    time.sleep(3)
+    lg = bs.login()
+    if lg.error_code == '0':
+        log("🔄 Baostock 重连成功")
+        return True
+    else:
+        log(f"❌ Baostock 重连失败：{lg.error_code} - {lg.error_msg}")
+        return False
 
 
-def save_stock_data(code, df):
+def download_one_stock(code, start_date, end_date, freq, max_retry=2):
+    """下载单只股票数据，支持断线重连重试和超时保护"""
+    cfg = FREQ_CONFIG[freq]
+    for attempt in range(max_retry + 1):
+        try:
+            # 设置超时闹钟（防止 Baostock 挂起死循环）
+            signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(DOWNLOAD_TIMEOUT)
+
+            rs = bs.query_history_k_data_plus(
+                code,
+                cfg["fields"],
+                start_date=start_date,
+                end_date=end_date,
+                frequency=cfg["frequency"],
+                adjustflag="2",  # 2=前复权
+            )
+
+            if rs.error_code != '0':
+                signal.alarm(0)  # 取消闹钟
+                # 网络错误（10002007）或登录态失效，尝试重连后重试
+                if attempt < max_retry:
+                    log(f"⚠️ {code} 遇到错误 {rs.error_code}，第 {attempt+1} 次重连重试...")
+                    if baostock_reconnect():
+                        continue
+                raise Exception(f"Baostock error: {rs.error_code} - {rs.error_msg}")
+
+            data_list = []
+            while rs.next():
+                data_list.append(rs.get_row_data())
+
+            signal.alarm(0)  # 取消闹钟
+
+            if not data_list:
+                return None
+
+            df = pd.DataFrame(data_list, columns=rs.fields)
+            return df
+
+        except DownloadTimeout:
+            signal.alarm(0)  # 确保取消闹钟
+            if attempt < max_retry:
+                log(f"⏰ {code} 下载超时（{DOWNLOAD_TIMEOUT}秒），第 {attempt+1} 次重连重试...")
+                baostock_reconnect()
+                continue
+            raise Exception(f"下载超时（{DOWNLOAD_TIMEOUT}秒），Baostock 可能挂起")
+        except Exception as e:
+            signal.alarm(0)  # 确保取消闹钟
+            # 网络异常也尝试重连
+            if attempt < max_retry and ("网络" in str(e) or "10002007" in str(e) or "Connection" in str(e)):
+                log(f"⚠️ {code} 网络异常，第 {attempt+1} 次重连重试...")
+                baostock_reconnect()
+                continue
+            raise
+
+
+def save_stock_data(code, df, freq):
     """保存单只股票数据"""
+    cfg = FREQ_CONFIG[freq]
     exchange = code.split(".")[0]  # sh / sz
-    filepath = DATA_DIR / exchange / f"{code}.csv"
+    filepath = cfg["data_dir"] / exchange / f"{code}.csv"
     df.to_csv(filepath, index=False, encoding="utf-8")
     return filepath
 
@@ -166,10 +253,15 @@ def save_stock_data(code, df):
 
 def full_download(args):
     """全量下载（断点续传）"""
+    freq = args.freq
+    # both 模式：同时下载日线和分钟线，用日线配置做外层循环
+    outer_freq = "daily" if freq == "both" else freq
+    cfg = FREQ_CONFIG[outer_freq]
+    label = "日线+分钟线" if freq == "both" else cfg["label"]
+
     log("=" * 60)
-    log("开始全量A股日线数据下载（Baostock，前复权）")
-    log(f"数据目录：{DATA_DIR}")
-    log(f"状态文件：{STATUS_FILE}")
+    log(f"开始全量A股{label}数据下载（Baostock，前复权）")
+    log(f"数据目录：{cfg['data_dir']}" + (f" 和 {FREQ_CONFIG['minute']['data_dir']}" if freq == "both" else ""))
     log("=" * 60)
 
     # 登录
@@ -184,14 +276,17 @@ def full_download(args):
     total = len(df_stocks)
     log(f"共 {total} 只股票待下载")
 
-    # 加载状态
-    status = load_status()
-    if not status["started_at"]:
-        status["started_at"] = datetime.now().isoformat()
-    status["total_stocks"] = total
+    # 加载状态（both 模式加载两个状态文件）
+    status_daily = load_status("daily")
+    status_minute = load_status("minute") if freq == "both" else None
 
-    completed_set = set(status["completed"])
-    failed_set = set(status["failed"])
+    if not status_daily["started_at"]:
+        status_daily["started_at"] = datetime.now().isoformat()
+    status_daily["total_stocks"] = total
+    if freq == "both":
+        if not status_minute["started_at"]:
+            status_minute["started_at"] = datetime.now().isoformat()
+        status_minute["total_stocks"] = total
 
     # 确定结束日期
     end_date = datetime.now().strftime("%Y-%m-%d")
@@ -201,47 +296,70 @@ def full_download(args):
         code = row["code"]
         code_name = row.get("code_name", "")
 
-        # 跳过已完成
-        if code in completed_set:
-            continue
-
         # 如果指定了单只股票
         if args.stock and code != args.stock:
             continue
 
-        status["current_stock"] = code
+        # both 模式：如果日线和分钟线都已完成，跳过
+        if freq == "both":
+            if code in status_daily["completed"] and code in status_minute["completed"]:
+                continue
+        else:
+            if code in status_daily["completed"]:
+                continue
+
+        status_daily["current_stock"] = code
         progress = f"[{idx + 1}/{total}]"
 
-        try:
-            log(f"{progress} 下载 {code} {code_name} ...")
-            df = download_one_stock(code, START_DATE, end_date)
+        # ---- 下载日线 ----
+        if code not in status_daily["completed"]:
+            try:
+                log(f"{progress} [日线] 下载 {code} {code_name} ...")
+                df = download_one_stock(code, FREQ_CONFIG["daily"]["start_date"], end_date, "daily")
 
-            if df is None or len(df) == 0:
-                log(f"{progress} ⚠️ {code} 无数据（可能已退市或长期停牌），跳过")
-                status["skipped"].append(code)
-            else:
-                filepath = save_stock_data(code, df)
-                log(f"{progress} ✅ {code} 完成：{len(df)} 条记录 → {filepath.name}")
-                status["completed"].append(code)
+                if df is None or len(df) == 0:
+                    log(f"{progress} [日线] ⚠️ {code} 无数据，跳过")
+                    status_daily["skipped"].append(code)
+                else:
+                    filepath = save_stock_data(code, df, "daily")
+                    log(f"{progress} [日线] ✅ {code} 完成：{len(df)} 条记录")
+                    status_daily["completed"].append(code)
+            except Exception as e:
+                log(f"{progress} [日线] ❌ {code} 失败：{e}")
+                status_daily["failed"].append(code)
+            save_status("daily", status_daily)
+            sleep_interval("daily")
 
-        except Exception as e:
-            log(f"{progress} ❌ {code} 失败：{e}")
-            status["failed"].append(code)
+        # ---- 下载分钟线（both 模式）----
+        if freq == "both" and code not in status_minute["completed"]:
+            try:
+                log(f"{progress} [分钟线] 下载 {code} {code_name} ...")
+                df = download_one_stock(code, FREQ_CONFIG["minute"]["start_date"], end_date, "minute")
 
-        # 保存状态（每只股票都保存，防中断丢失进度）
-        save_status(status)
-
-        # 防限流
-        sleep_interval()
+                if df is None or len(df) == 0:
+                    log(f"{progress} [分钟线] ⚠️ {code} 无数据，跳过")
+                    status_minute["skipped"].append(code)
+                else:
+                    filepath = save_stock_data(code, df, "minute")
+                    log(f"{progress} [分钟线] ✅ {code} 完成：{len(df)} 条记录")
+                    status_minute["completed"].append(code)
+            except Exception as e:
+                log(f"{progress} [分钟线] ❌ {code} 失败：{e}")
+                status_minute["failed"].append(code)
+            save_status("minute", status_minute)
+            sleep_interval("minute")
 
     # 完成
-    status["current_stock"] = None
-    save_status(status)
+    status_daily["current_stock"] = None
+    save_status("daily", status_daily)
+    if freq == "both":
+        status_minute["current_stock"] = None
+        save_status("minute", status_minute)
 
     log("=" * 60)
-    log(f"下载完成！成功：{len(status['completed'])}，失败：{len(status['failed'])}，跳过：{len(status['skipped'])}")
-    if status["failed"]:
-        log(f"失败列表（前20）：{status['failed'][:20]}")
+    log(f"日线：成功 {len(status_daily['completed'])}，失败 {len(status_daily['failed'])}，跳过 {len(status_daily['skipped'])}")
+    if freq == "both":
+        log(f"分钟线：成功 {len(status_minute['completed'])}，失败 {len(status_minute['failed'])}，跳过 {len(status_minute['skipped'])}")
     log("=" * 60)
 
     bs.logout()
@@ -250,8 +368,11 @@ def full_download(args):
 
 def incremental_update(args):
     """增量更新（只下载上次更新后的新数据）"""
+    freq = args.freq
+    cfg = FREQ_CONFIG[freq]
+
     log("=" * 60)
-    log("开始增量更新（只下载新数据）")
+    log(f"开始{cfg['label']}增量更新（只下载新数据）")
     log("=" * 60)
 
     lg = bs.login()
@@ -260,7 +381,7 @@ def incremental_update(args):
         sys.exit(1)
     log("✅ Baostock 登录成功")
 
-    status = load_status()
+    status = load_status(freq)
     if not status["completed"]:
         log("⚠️ 未找到全量下载记录，请先运行全量下载")
         bs.logout()
@@ -280,27 +401,29 @@ def incremental_update(args):
     updated = 0
     for code in status["completed"]:
         try:
-            df = download_one_stock(code, start_date, end_date)
+            df = download_one_stock(code, start_date, end_date, freq)
             if df is not None and len(df) > 0:
                 # 追加到已有文件
                 exchange = code.split(".")[0]
-                filepath = DATA_DIR / exchange / f"{code}.csv"
+                filepath = cfg["data_dir"] / exchange / f"{code}.csv"
                 if filepath.exists():
                     df_existing = pd.read_csv(filepath)
+                    # 分钟线按 date+time 去重，日线按 date 去重
+                    subset = ["date", "time"] if freq == "minute" else ["date"]
                     df_combined = pd.concat([df_existing, df], ignore_index=True)
-                    df_combined = df_combined.drop_duplicates(subset=["date"], keep="last")
-                    df_combined = df_combined.sort_values("date").reset_index(drop=True)
+                    df_combined = df_combined.drop_duplicates(subset=subset, keep="last")
+                    df_combined = df_combined.sort_values(subset).reset_index(drop=True)
                     df_combined.to_csv(filepath, index=False, encoding="utf-8")
                 else:
-                    save_stock_data(code, df)
+                    save_stock_data(code, df, freq)
                 updated += 1
                 log(f"✅ {code} 增量更新：{len(df)} 条新记录")
-            sleep_interval()
+            sleep_interval(freq)
         except Exception as e:
             log(f"❌ {code} 增量更新失败：{e}")
 
     status["updated_at"] = datetime.now().isoformat()
-    save_status(status)
+    save_status(freq, status)
 
     log(f"增量更新完成！更新 {updated} 只股票")
     bs.logout()
@@ -308,13 +431,16 @@ def incremental_update(args):
 
 def check_data_quality(args):
     """数据质量检查"""
+    freq = args.freq
+    cfg = FREQ_CONFIG[freq]
+
     log("=" * 60)
-    log("数据质量检查")
+    log(f"{cfg['label']}数据质量检查")
     log("=" * 60)
 
-    status = load_status()
+    status = load_status(freq)
     total = status.get("total_stocks", 0)
-    completed = len(status.get("completed", []))
+    completed = len(set(status.get("completed", [])))
     failed = len(status.get("failed", []))
     skipped = len(status.get("skipped", []))
 
@@ -328,9 +454,9 @@ def check_data_quality(args):
     if completed > 0:
         record_counts = []
         empty_files = []
-        for code in status["completed"][:100]:  # 抽样检查前100只
+        for code in list(set(status["completed"]))[:100]:  # 抽样检查前100只
             exchange = code.split(".")[0]
-            filepath = DATA_DIR / exchange / f"{code}.csv"
+            filepath = cfg["data_dir"] / exchange / f"{code}.csv"
             if filepath.exists():
                 df = pd.read_csv(filepath)
                 record_counts.append(len(df))
@@ -353,12 +479,14 @@ def check_data_quality(args):
 
 def main():
     parser = argparse.ArgumentParser(description="A股全量历史数据下载（Baostock）")
+    parser.add_argument("--freq", choices=["daily", "minute", "both"], default="daily",
+                        help="数据频率：daily=日线（默认），minute=5分钟线，both=日线+分钟线（单进程，防限流）")
     parser.add_argument("--incremental", action="store_true", help="增量更新（只下载新数据）")
     parser.add_argument("--check", action="store_true", help="数据质量检查")
     parser.add_argument("--stock", type=str, help="只下载指定股票（调试用，如 sh.600519）")
     args = parser.parse_args()
 
-    ensure_dirs()
+    ensure_dirs(args.freq)
 
     if args.check:
         check_data_quality(args)
