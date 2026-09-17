@@ -58,8 +58,10 @@
 | 项目总纲 | `00_项目总纲.md` | 目标/期限/成功标准/当前状态/治理卡指针 |
 | 文档地图 | `docs/DOCUMENTATION_MAP.md` | 本文档 |
 | 需求文档 | `docs/REQUIREMENTS.md` | 功能需求、验收标准、不做什么 |
+| 待讨论需求 | `docs/待讨论需求清单.md` | 还没聊清楚的需求点，聊完更新到 REQUIREMENTS |
 | 工作流 | `docs/WORKFLOW.md` | 阶段流水线 + 各阶段校验门 + SOP链接 |
 | 目录结构 | `docs/DIRECTORY_STRUCTURE.md` | 存储分工、各目录职责、命名规则 |
+| ETF轮动策略 | `docs/strategies/ETF轮动策略_v0.1.md` | MVP策略设计稿（候选池/调仓/选股/风控） |
 
 ### 一、项目治理（六槽位）
 
