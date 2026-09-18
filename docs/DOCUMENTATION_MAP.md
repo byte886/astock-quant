@@ -63,6 +63,7 @@
 | 工作流 | `docs/WORKFLOW.md` | 阶段流水线 + 各阶段校验门 + SOP链接 |
 | 目录结构 | `docs/DIRECTORY_STRUCTURE.md` | 存储分工、各目录职责、命名规则 |
 | ETF轮动策略 | `docs/strategies/ETF轮动策略_v0.1.md` | MVP策略设计稿（候选池/调仓/选股/风控） |
+| 舆情因子与模拟盘 | `docs/strategies/舆情因子与模拟盘设计_v0.1.md` | 股吧情绪反向指标+历史数据验证方案+模拟盘设计 |
 
 ### 一、项目治理（六槽位）
 

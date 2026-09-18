@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """
-A股ETF日线数据下载脚本（Baostock）
+A股ETF数据下载脚本（Baostock）— 支持日线 + 5分钟线
 
 特性：
-- 全量ETF（沪市+深市，约1500+只），前复权
-- 防限流：单只间隔 1-2 秒（ETF数据量小，请求快）
+- 全量ETF（沪市+深市，1588只），前复权
+- 支持 --freq daily/minute/both
+- 防限流：日线 1-2 秒，5分钟线 2-3 秒
 - 断点续传：状态文件记录已下载ETF，中断后从断点继续
 - 增量更新：--incremental 只下载上次更新后的新数据
-- 数据目录：data/raw/etf/daily/（按交易所分子目录）
+- 数据目录：data/raw/etf/daily/ 和 data/raw/etf/minute/
 
 用法：
-  python scripts/download_etf.py                     # 全量下载ETF日线（断点续传）
-  python scripts/download_etf.py --incremental        # ETF日线增量更新
-  python scripts/download_etf.py --check              # 数据质量检查
-  python scripts/download_etf.py --etf sh.510300     # 只下载指定ETF（调试用）
+  python scripts/download_etf.py --freq minute       # 下载ETF 5分钟线
+  python scripts/download_etf.py --freq both          # 日线+5分钟线一起下
+  python scripts/download_etf.py --freq daily          # 只下日线（默认）
+  python scripts/download_etf.py --incremental         # 增量更新
+  python scripts/download_etf.py --check               # 数据质量检查
+  python scripts/download_etf.py --etf sh.510300      # 只下载指定ETF（调试用）
 """
 
 import baostock as bs
@@ -32,20 +35,23 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 WORKSPACE_DIR = PROJECT_ROOT / "data" / "_workspace"
-DATA_DIR = PROJECT_ROOT / "data" / "raw" / "etf" / "daily"
-STATUS_FILE = WORKSPACE_DIR / "download_status_etf.json"
 ETF_LIST_FILE = WORKSPACE_DIR / "etf_list.csv"
 LOG_FILE = WORKSPACE_DIR / "download.log"
 
-# ETF 日线字段
-FIELDS = "date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg"
+# 日线字段
+DAILY_FIELDS = "date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg"
+
+# 5分钟线字段
+MINUTE_FIELDS = "date,time,code,open,high,low,close,volume,amount,adjustflag"
 
 # 防限流间隔（秒）
-INTERVAL_MIN = 1.0
-INTERVAL_MAX = 2.0
+DAILY_INTERVAL_MIN = 1.0
+DAILY_INTERVAL_MAX = 2.0
+MINUTE_INTERVAL_MIN = 2.0
+MINUTE_INTERVAL_MAX = 3.0
 
 # 单只下载超时（秒）
-DOWNLOAD_TIMEOUT = 120
+DOWNLOAD_TIMEOUT = 300
 
 
 class DownloadTimeout(Exception):
@@ -66,16 +72,29 @@ def log(msg):
         f.write(line + "\n")
 
 
-def ensure_dirs():
+def get_dirs(freq):
+    """根据频率返回数据目录和状态文件"""
+    if freq == "minute":
+        data_dir = PROJECT_ROOT / "data" / "raw" / "etf" / "minute"
+        status_file = WORKSPACE_DIR / "download_status_etf_minute.json"
+    else:
+        data_dir = PROJECT_ROOT / "data" / "raw" / "etf" / "daily"
+        status_file = WORKSPACE_DIR / "download_status_etf.json"
+    return data_dir, status_file
+
+
+def ensure_dirs(freq):
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    (DATA_DIR / "sh").mkdir(exist_ok=True)
-    (DATA_DIR / "sz").mkdir(exist_ok=True)
+    data_dir, _ = get_dirs(freq)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "sh").mkdir(exist_ok=True)
+    (data_dir / "sz").mkdir(exist_ok=True)
 
 
-def load_status():
-    if STATUS_FILE.exists():
-        with open(STATUS_FILE, "r", encoding="utf-8") as f:
+def load_status(freq):
+    _, status_file = get_dirs(freq)
+    if status_file.exists():
+        with open(status_file, "r", encoding="utf-8") as f:
             return json.load(f)
     return {
         "started_at": None,
@@ -88,9 +107,10 @@ def load_status():
     }
 
 
-def save_status(status):
+def save_status(status, freq):
     status["updated_at"] = datetime.now().isoformat()
-    with open(STATUS_FILE, "w", encoding="utf-8") as f:
+    _, status_file = get_dirs(freq)
+    with open(status_file, "w", encoding="utf-8") as f:
         json.dump(status, f, ensure_ascii=False, indent=2)
 
 
@@ -112,7 +132,6 @@ def baostock_reconnect():
 def get_etf_list():
     """获取全部ETF列表（沪市+深市）"""
     if ETF_LIST_FILE.exists():
-        log(f"读取缓存的ETF列表：{ETF_LIST_FILE}")
         df = pd.read_csv(ETF_LIST_FILE)
         return df
 
@@ -122,7 +141,6 @@ def get_etf_list():
     while (rs.error_code == '0') & rs.next():
         row = rs.get_row_data()
         code = row[0]
-        # ETF 代码：sh.51/56/58, sz.15/16
         if (code.startswith("sh.51") or code.startswith("sh.56") or
                 code.startswith("sh.58") or code.startswith("sz.15") or
                 code.startswith("sz.16")):
@@ -135,8 +153,11 @@ def get_etf_list():
     return df
 
 
-def download_one_etf(code, start_date, end_date, max_retry=2):
-    """下载单只ETF日线数据，支持重连重试和超时保护"""
+def download_one_etf(code, start_date, end_date, freq, max_retry=2):
+    """下载单只ETF数据，支持重连重试和超时保护"""
+    fields = MINUTE_FIELDS if freq == "minute" else DAILY_FIELDS
+    frequency = "5" if freq == "minute" else "d"
+
     for attempt in range(max_retry + 1):
         try:
             signal.signal(signal.SIGALRM, _timeout_handler)
@@ -144,10 +165,10 @@ def download_one_etf(code, start_date, end_date, max_retry=2):
 
             rs = bs.query_history_k_data_plus(
                 code,
-                FIELDS,
+                fields,
                 start_date=start_date,
                 end_date=end_date,
-                frequency="d",
+                frequency=frequency,
                 adjustflag="2",  # 前复权
             )
 
@@ -187,9 +208,10 @@ def download_one_etf(code, start_date, end_date, max_retry=2):
             raise
 
 
-def save_etf_data(code, df):
+def save_etf_data(code, df, freq):
+    data_dir, _ = get_dirs(freq)
     exchange = code.split(".")[0]
-    filepath = DATA_DIR / exchange / f"{code}.csv"
+    filepath = data_dir / exchange / f"{code}.csv"
     df.to_csv(filepath, index=False, encoding="utf-8")
     return filepath
 
@@ -198,9 +220,13 @@ def save_etf_data(code, df):
 
 def full_download(args):
     """全量下载（断点续传）"""
+    freq = args.freq
+    freq_name = "5分钟线" if freq == "minute" else "日线"
+
     log("=" * 60)
-    log("开始全量ETF日线数据下载（Baostock，前复权）")
-    log(f"数据目录：{DATA_DIR}")
+    log(f"开始全量ETF{freq_name}数据下载（Baostock，前复权）")
+    data_dir, _ = get_dirs(freq)
+    log(f"数据目录：{data_dir}")
     log("=" * 60)
 
     lg = bs.login()
@@ -213,13 +239,16 @@ def full_download(args):
     total = len(df_etfs)
     log(f"共 {total} 只ETF待下载")
 
-    status = load_status()
+    status = load_status(freq)
     if not status["started_at"]:
         status["started_at"] = datetime.now().isoformat()
     status["total_etfs"] = total
 
     end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = "2000-01-01"  # ETF最早约2000年
+    start_date = "2006-01-01" if freq == "minute" else "2000-01-01"
+
+    interval_min = MINUTE_INTERVAL_MIN if freq == "minute" else DAILY_INTERVAL_MIN
+    interval_max = MINUTE_INTERVAL_MAX if freq == "minute" else DAILY_INTERVAL_MAX
 
     for idx, row in df_etfs.iterrows():
         code = row["code"]
@@ -236,27 +265,27 @@ def full_download(args):
 
         try:
             log(f"{progress} 下载 {code} {code_name} ...")
-            df = download_one_etf(code, start_date, end_date)
+            df = download_one_etf(code, start_date, end_date, freq)
 
             if df is None or len(df) == 0:
                 log(f"{progress} ⚠️ {code} 无数据，跳过")
                 status["skipped"].append(code)
             else:
-                filepath = save_etf_data(code, df)
+                filepath = save_etf_data(code, df, freq)
                 log(f"{progress} ✅ {code} 完成：{len(df)} 条记录")
                 status["completed"].append(code)
         except Exception as e:
             log(f"{progress} ❌ {code} 失败：{e}")
             status["failed"].append(code)
 
-        save_status(status)
-        time.sleep(random.uniform(INTERVAL_MIN, INTERVAL_MAX))
+        save_status(status, freq)
+        time.sleep(random.uniform(interval_min, interval_max))
 
     status["current_etf"] = None
-    save_status(status)
+    save_status(status, freq)
 
     log("=" * 60)
-    log(f"ETF下载完成：成功 {len(status['completed'])}，失败 {len(status['failed'])}，跳过 {len(status['skipped'])}")
+    log(f"ETF{freq_name}下载完成：成功 {len(status['completed'])}，失败 {len(status['failed'])}，跳过 {len(status['skipped'])}")
     log("=" * 60)
 
     bs.logout()
@@ -265,8 +294,11 @@ def full_download(args):
 
 def incremental_update(args):
     """增量更新"""
+    freq = args.freq
+    freq_name = "5分钟线" if freq == "minute" else "日线"
+
     log("=" * 60)
-    log("开始ETF日线增量更新")
+    log(f"开始ETF{freq_name}增量更新")
     log("=" * 60)
 
     lg = bs.login()
@@ -275,7 +307,7 @@ def incremental_update(args):
         sys.exit(1)
     log("✅ Baostock 登录成功")
 
-    status = load_status()
+    status = load_status(freq)
     if not status["completed"]:
         log("⚠️ 未找到全量下载记录，请先运行全量下载")
         bs.logout()
@@ -291,29 +323,34 @@ def incremental_update(args):
     end_date = datetime.now().strftime("%Y-%m-%d")
     log(f"增量范围：{start_date} ~ {end_date}")
 
+    interval_min = MINUTE_INTERVAL_MIN if freq == "minute" else DAILY_INTERVAL_MIN
+    interval_max = MINUTE_INTERVAL_MAX if freq == "minute" else DAILY_INTERVAL_MAX
+
     updated = 0
     for code in status["completed"]:
         try:
-            df = download_one_etf(code, start_date, end_date)
+            df = download_one_etf(code, start_date, end_date, freq)
             if df is not None and len(df) > 0:
+                data_dir, _ = get_dirs(freq)
                 exchange = code.split(".")[0]
-                filepath = DATA_DIR / exchange / f"{code}.csv"
+                filepath = data_dir / exchange / f"{code}.csv"
                 if filepath.exists():
                     df_existing = pd.read_csv(filepath)
                     df_combined = pd.concat([df_existing, df], ignore_index=True)
-                    df_combined = df_combined.drop_duplicates(subset=["date"], keep="last")
-                    df_combined = df_combined.sort_values("date").reset_index(drop=True)
+                    subset = ["date", "time"] if freq == "minute" else ["date"]
+                    df_combined = df_combined.drop_duplicates(subset=subset, keep="last")
+                    df_combined = df_combined.sort_values(subset).reset_index(drop=True)
                     df_combined.to_csv(filepath, index=False, encoding="utf-8")
                 else:
-                    save_etf_data(code, df)
+                    save_etf_data(code, df, freq)
                 updated += 1
                 log(f"✅ {code} 增量更新：{len(df)} 条新记录")
-            time.sleep(random.uniform(INTERVAL_MIN, INTERVAL_MAX))
+            time.sleep(random.uniform(interval_min, interval_max))
         except Exception as e:
             log(f"❌ {code} 增量更新失败：{e}")
 
     status["updated_at"] = datetime.now().isoformat()
-    save_status(status)
+    save_status(status, freq)
 
     log(f"增量更新完成！更新 {updated} 只ETF")
     bs.logout()
@@ -321,11 +358,14 @@ def incremental_update(args):
 
 def check_data_quality(args):
     """数据质量检查"""
+    freq = args.freq
+    freq_name = "5分钟线" if freq == "minute" else "日线"
+
     log("=" * 60)
-    log("ETF数据质量检查")
+    log(f"ETF{freq_name}数据质量检查")
     log("=" * 60)
 
-    status = load_status()
+    status = load_status(freq)
     total = status.get("total_etfs", 0)
     completed = len(set(status.get("completed", [])))
     failed = len(status.get("failed", []))
@@ -339,9 +379,10 @@ def check_data_quality(args):
 
     if completed > 0:
         record_counts = []
+        data_dir, _ = get_dirs(freq)
         for code in list(set(status["completed"]))[:50]:
             exchange = code.split(".")[0]
-            filepath = DATA_DIR / exchange / f"{code}.csv"
+            filepath = data_dir / exchange / f"{code}.csv"
             if filepath.exists():
                 df = pd.read_csv(filepath)
                 record_counts.append(len(df))
@@ -358,20 +399,33 @@ def check_data_quality(args):
 # ============ 入口 ============
 
 def main():
-    parser = argparse.ArgumentParser(description="A股ETF日线数据下载（Baostock）")
+    parser = argparse.ArgumentParser(description="A股ETF数据下载（Baostock，日线+5分钟线）")
+    parser.add_argument("--freq", type=str, default="daily", choices=["daily", "minute", "both"],
+                        help="下载频率：daily(日线)/minute(5分钟线)/both(两者都下)，默认daily")
     parser.add_argument("--incremental", action="store_true", help="增量更新（只下载新数据）")
     parser.add_argument("--check", action="store_true", help="数据质量检查")
     parser.add_argument("--etf", type=str, help="只下载指定ETF（调试用，如 sh.510300）")
     args = parser.parse_args()
 
-    ensure_dirs()
-
-    if args.check:
-        check_data_quality(args)
-    elif args.incremental:
-        incremental_update(args)
+    if args.freq == "both":
+        # both 模式：先下日线，再下5分钟线
+        for f in ["daily", "minute"]:
+            args.freq = f
+            ensure_dirs(f)
+            if args.check:
+                check_data_quality(args)
+            elif args.incremental:
+                incremental_update(args)
+            else:
+                full_download(args)
     else:
-        full_download(args)
+        ensure_dirs(args.freq)
+        if args.check:
+            check_data_quality(args)
+        elif args.incremental:
+            incremental_update(args)
+        else:
+            full_download(args)
 
 
 if __name__ == "__main__":
