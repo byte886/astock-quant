@@ -8,12 +8,34 @@
 import json
 import subprocess
 import time
+import os
+import sys
+import atexit
 from pathlib import Path
 from datetime import datetime
 
 PROJECT_ROOT = Path(__file__).parent.parent
+PYTHON_BIN = str(PROJECT_ROOT / ".venv" / "bin" / "python")
 STATUS_DIR = PROJECT_ROOT / "data" / "_workspace"
 LOG_FILE = PROJECT_ROOT / "data" / "_workspace" / "download_monitor.log"
+LOCK_FILE = PROJECT_ROOT / "data" / "_workspace" / "download_monitor.lock"
+
+# ========== 单例锁：确保只有一个监控进程运行 ==========
+def acquire_lock():
+    lock_path = Path(LOCK_FILE)
+    if lock_path.exists():
+        try:
+            old_pid = int(lock_path.read_text().strip())
+            os.kill(old_pid, 0)  # 信号0=只检查进程是否存在
+            print(f"[MONITOR] 已有监控进程运行中 (PID: {old_pid})，本实例退出", flush=True)
+            sys.exit(0)
+        except (OSError, ValueError):
+            lock_path.unlink()  # 旧进程已死，清理锁文件
+    lock_path.write_text(str(os.getpid()))
+    atexit.register(lambda: lock_path.unlink(missing_ok=True))
+
+acquire_lock()
+# =====================================================
 
 def log(msg):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -67,7 +89,7 @@ def get_stock_progress():
 def start_etf_minute_download():
     """启动ETF 5分钟线下载"""
     log("启动ETF 5分钟线下载...")
-    cmd = ["python3", "scripts/download_etf.py", "--freq", "minute"]
+    cmd = [PYTHON_BIN, "scripts/download_etf.py", "--freq", "minute"]
     subprocess.Popen(cmd, cwd=PROJECT_ROOT,
                      stdout=open(PROJECT_ROOT / "data/_workspace/etf_minute_stdout.log", "a"),
                      stderr=subprocess.STDOUT)
@@ -75,7 +97,7 @@ def start_etf_minute_download():
 def start_stock_download():
     """启动个股下载（both模式：日线+5分钟线）"""
     log("启动个股下载（both模式）...")
-    cmd = ["python3", "scripts/download_data.py", "--freq", "both"]
+    cmd = [PYTHON_BIN, "scripts/download_data.py", "--freq", "both"]
     subprocess.Popen(cmd, cwd=PROJECT_ROOT,
                      stdout=open(PROJECT_ROOT / "data/_workspace/stock_stdout.log", "a"),
                      stderr=subprocess.STDOUT)
