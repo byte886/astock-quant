@@ -98,7 +98,9 @@
 **问题**：会话变长后，早期逐字细节被压成摘要，上下文里只剩结论、没有原话。
 
 **解法**：用独立技能 `local-trajectory-recall` 的 `recall.py`（本机 trajectory 检索，跨会话）。
-脚本在 `~/.doubao/agent_mode/workspace/.user_skills/local-trajectory-recall/scripts/recall.py`，下面记作 `<recall>`。
+
+> **豆包专属能力**：依赖豆包桌面端把会话逐字落盘到本机 `trajectory.jsonl`；别的 AI 助手/平台既无此文件、格式也不同，装了也跑不出东西。仅 macOS 实测。
+脚本在 `~/Doubao/skills/local-trajectory-recall/scripts/recall.py`，下面记作 `<recall>`。
 
 - 列历史会话：`python3 <recall> list`（跨会话找"之前聊过什么"先看这个）
 - 定位当前会话：`python3 <recall> where`
