@@ -92,3 +92,19 @@
 - [ ] 新决策已写入 `02_决策记录/`
 - [ ] **本轮若有重要讨论/决策 → 已往 `docs/HANDOFF.md` §1 倒序追加一条日志**（项目日志是活的，别让它停在旧状态）
 - [ ] 原始调研素材未被修改
+
+## 7. 本地会话轨迹（trajectory）——压缩后回查原始记录
+
+**问题**：会话变长后，早期逐字细节被压成摘要，上下文里只剩结论、没有原话。
+
+**解法**：豆包桌面端把每次会话的逐字记录按 session 落盘在本地，用 `scripts/session_history.py` 查。
+
+- 定位：`python3 scripts/session_history.py where`（自动找最新 trajectory；多会话时先确认路径对不对）
+- 统计：`python3 scripts/session_history.py stats`
+- 搜历史：`python3 scripts/session_history.py search 关键词`（当前会话）；加 `--all` 跨全部历史会话搜
+- 导出：`python3 scripts/session_history.py export out.md`
+
+**规则**：
+- 上下文被压缩、记不清"当时到底怎么说的"时，回这里查原文，**别凭印象编**。
+- trajectory 含系统提示、工具返回、token 等敏感内容——只本机自用，**绝不粘进 git、文档、对外聊天**。
+- 它是原始流水账；整理过的结论仍以 HANDOFF / 参与者画像 / REQUIREMENTS 为准，trajectory 只用于对原文。
