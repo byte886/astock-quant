@@ -59,6 +59,18 @@ def main():
                 confirmed += 1
                 log(f"满足触发条件（第{confirmed}/{CONFIRM_TIMES}次确认）")
                 if confirmed >= CONFIRM_TIMES:
+                    # 1) 补全缺口：主下载断线可能漏掉个别 dividend/growth，
+                    #    下载脚本会跳过完整的、只补缺失与 failed 的标的
+                    log("主下载结束，开始补全缺失财务数据（一轮）...")
+                    r0 = subprocess.run(
+                        [str(ROOT / ".venv/bin/python"),
+                         str(ROOT / "scripts/download_fundamentals.py")],
+                        cwd=ROOT, capture_output=True, text=True)
+                    with open(LOG, "a") as f:
+                        f.write(r0.stdout[-3000:] + "\n" + r0.stderr[-1000:] + "\n")
+                    log(f"补全结束 rc={r0.returncode}")
+                    time.sleep(5)
+                    # 2) 正式回测
                     log("数据已下齐，开始正式回测 ...")
                     r = subprocess.run(
                         [str(ROOT / ".venv/bin/python"),
@@ -67,7 +79,7 @@ def main():
                     with open(LOG, "a") as f:
                         f.write(r.stdout + "\n" + r.stderr + "\n")
                     log(f"回测结束，returncode={r.returncode}，结果见 results/multifactor_backtest/")
-                    # 回测完成后恢复全市场下载服务（财务下载期间为独占连接曾暂停它）
+                    # 3) 回测完成后恢复全市场下载服务（财务下载期间为独占连接曾暂停它）
                     plist = Path.home() / "Library/LaunchAgents/com.astock-quant.download-monitor.plist"
                     if plist.exists():
                         rr = subprocess.run(["launchctl", "load", str(plist)],
