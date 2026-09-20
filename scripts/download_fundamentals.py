@@ -18,6 +18,8 @@
   python scripts/download_fundamentals.py --constituents # 只下历史成分股
 """
 
+import socket
+socket.setdefaulttimeout(120)          # 防止 baostock 查询永久阻塞（卡死看门狗）
 import baostock as bs
 import pandas as pd
 import os
@@ -27,6 +29,10 @@ import random
 import argparse
 from pathlib import Path
 from datetime import datetime
+
+
+class ConnError(Exception):
+    """baostock 连接类错误（断线/超时），需要重新登录。"""
 
 ROOT = Path(__file__).parent.parent
 FUND = ROOT / "data/raw/fundamentals"
@@ -38,16 +44,56 @@ START_YEAR = 2012          # 分红/财务起始（回测2015起，预留连续3
 QUARTERS = [(y, q) for y in range(START_YEAR, datetime.now().year + 1)
             for q in (1, 2, 3, 4)]
 
+CONN_HINTS = ("接收数据", "broken pipe", "连接", "网络", "timeout",
+              "timed out", "reset", "refused", "eof")
+
+
+def _is_conn_err(msg):
+    if isinstance(msg, (BrokenPipeError, ConnectionError, TimeoutError, OSError)):
+        return True
+    m = str(msg).lower()
+    return any(h in m for h in CONN_HINTS)
+
+
+def login():
+    try:
+        bs.logout()
+    except Exception:
+        pass
+    lg = bs.login()
+    return getattr(lg, "error_code", "1") == "0"
+
+
+def reconnect(retries=5):
+    """断线后重新登录，最多重试 retries 次。"""
+    for i in range(retries):
+        try:
+            if login():
+                print("  ~ 已重新登录 baostock")
+                return True
+        except Exception as e:
+            print(f"  ~ 重登尝试{i+1}失败: {e}")
+        time.sleep(3)
+    return False
+
 
 def get_csi800_codes():
-    hs, zz = set(), set()
-    rs = bs.query_hs300_stocks()
-    while rs.next():
-        hs.add(rs.get_row_data()[1])
-    rs = bs.query_zz500_stocks()
-    while rs.next():
-        zz.add(rs.get_row_data()[1])
-    return sorted(c for c in (hs | zz) if "688" not in c)
+    for rnd in range(3):
+        try:
+            hs, zz = set(), set()
+            rs = bs.query_hs300_stocks()
+            while rs.error_code == "0" and rs.next():
+                hs.add(rs.get_row_data()[1])
+            rs = bs.query_zz500_stocks()
+            while rs.error_code == "0" and rs.next():
+                zz.add(rs.get_row_data()[1])
+            return sorted(c for c in (hs | zz) if "688" not in c)
+        except Exception as e:
+            if _is_conn_err(e):
+                reconnect()
+            else:
+                time.sleep(2)
+    raise RuntimeError("无法获取中证800成分股列表")
 
 
 def fetch_table(query_fn, **kw):
@@ -58,12 +104,37 @@ def fetch_table(query_fn, **kw):
             while rs.error_code == "0" and rs.next():
                 rows.append(rs.get_row_data())
             if rs.error_code != "0":
+                msg = getattr(rs, "error_msg", "")
+                if _is_conn_err(msg):
+                    raise ConnError(msg)
                 time.sleep(1.0)
                 continue
             return pd.DataFrame(rows, columns=rs.fields) if rows else pd.DataFrame()
-        except Exception:
+        except ConnError:
+            raise                       # 交给外层重登录
+        except Exception as e:
+            if _is_conn_err(e):
+                raise ConnError(str(e))
             time.sleep(1.5)
     return pd.DataFrame()
+
+
+def download_with_reconnect(code, rounds=3):
+    """单只下载，连接类错误触发重登录后整只重试。"""
+    for rnd in range(rounds):
+        try:
+            return download_one(code)
+        except ConnError:
+            print(f"  ~ {code} 连接中断，重登后重试({rnd+1}/{rounds})")
+            if not reconnect():
+                time.sleep(5)
+        except Exception as e:
+            if _is_conn_err(e):
+                print(f"  ~ {code} 连接异常 {e}，重登重试({rnd+1}/{rounds})")
+                reconnect()
+            else:
+                raise
+    return False, 0
 
 
 def download_one(code):
@@ -140,7 +211,8 @@ def main():
     for d in ["profit", "growth", "dividend"]:
         (FUND / d).mkdir(parents=True, exist_ok=True)
 
-    bs.login()
+    if not login():
+        raise RuntimeError("baostock 初始登录失败")
     if args.constituents:
         download_constituents()
         bs.logout()
@@ -156,7 +228,13 @@ def main():
         st = json.loads(STATUS_FILE.read_text())
     done = set(st.get("completed", []))
 
+    def save_status():
+        st["completed"] = sorted(done)
+        st["updated_at"] = datetime.now().isoformat()
+        STATUS_FILE.write_text(json.dumps(st, ensure_ascii=False, indent=1))
+
     t0 = time.time()
+    processed_since_login = 0
     for i, code in enumerate(codes):
         if code in done:
             continue
@@ -165,29 +243,34 @@ def main():
            (FUND / "dividend" / f"{code}.csv").exists():
             done.add(code)
             continue
+        # 每处理 30 只主动重新登录保活，预防长连接断线
+        if processed_since_login >= 30:
+            reconnect()
+            processed_since_login = 0
         try:
-            ok, n = download_one(code)
+            ok, n = download_with_reconnect(code)
+            processed_since_login += 1
             if ok:
                 done.add(code)
                 st["failed"].pop(code, None)
                 print(f"[{i+1}/{len(codes)}] {code} ✓ {n}季")
             else:
-                st["failed"][code] = "无数据"
+                st["failed"][code] = "无数据或连接失败"
                 print(f"[{i+1}/{len(codes)}] {code} ✗ 无数据")
         except Exception as e:
             st["failed"][code] = str(e)[:80]
             print(f"[{i+1}/{len(codes)}] {code} ✗ {e}")
-        st["completed"] = sorted(done)
-        if (i + 1) % 10 == 0:
-            st["updated_at"] = datetime.now().isoformat()
-            STATUS_FILE.write_text(json.dumps(st, ensure_ascii=False, indent=1))
-            rate = (i + 1) / (time.time() - t0)
-            eta = (len(codes) - i - 1) / rate
-            print(f"  --- 进度 {len(done)}/{len(codes)}, {rate:.1f}只/秒, 预计剩余{eta/60:.0f}分钟 ---")
+            if _is_conn_err(e):
+                reconnect()
+                processed_since_login = 0
+        save_status()
+        ndone = len(done)
+        if ndone % 10 == 0:
+            rate = ndone / max(time.time() - t0, 1)
+            eta = (len(codes) - ndone) / max(rate, 1e-6)
+            print(f"  --- 进度 {ndone}/{len(codes)}, 预计剩余{eta/60:.0f}分钟 ---")
 
-    st["completed"] = sorted(done)
-    st["updated_at"] = datetime.now().isoformat()
-    STATUS_FILE.write_text(json.dumps(st, ensure_ascii=False, indent=1))
+    save_status()
     print(f"\n完成 {len(done)}/{len(codes)}，失败 {len(st['failed'])}")
     bs.logout()
 
