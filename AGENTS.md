@@ -97,12 +97,16 @@
 
 **问题**：会话变长后，早期逐字细节被压成摘要，上下文里只剩结论、没有原话。
 
-**解法**：豆包桌面端把每次会话的逐字记录按 session 落盘在本地，用 `scripts/session_history.py` 查。
+**解法**：用独立技能 `local-trajectory-recall` 的 `recall.py`（本机 trajectory 检索，跨会话）。
+脚本在 `~/.doubao/agent_mode/workspace/.user_skills/local-trajectory-recall/scripts/recall.py`，下面记作 `<recall>`。
 
-- 定位：`python3 scripts/session_history.py where`（自动找最新 trajectory；多会话时先确认路径对不对）
-- 统计：`python3 scripts/session_history.py stats`
-- 搜历史：`python3 scripts/session_history.py search 关键词`（当前会话）；加 `--all` 跨全部历史会话搜
-- 导出：`python3 scripts/session_history.py export out.md`
+- 列历史会话：`python3 <recall> list`（跨会话找"之前聊过什么"先看这个）
+- 定位当前会话：`python3 <recall> where`
+- 统计：`python3 <recall> stats`
+- 搜历史：`python3 <recall> search 关键词`（当前会话）；`--all` 跨全部主会话；`--id <sid片段>` 指定会话
+- 导出：`python3 <recall> export out.md`
+
+> 项目根 `scripts/session_history.py` 是早期单会话版，保留可用；上面的 recall.py 是跨会话增强版，优先用它。
 
 **规则**：
 - 上下文被压缩、记不清"当时到底怎么说的"时，回这里查原文，**别凭印象编**。
