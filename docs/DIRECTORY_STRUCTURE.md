@@ -13,6 +13,8 @@
 | 原始数据（raw/） | ❌ 忽略 | ✅ | ✅（如需） | ❌ |
 | 处理后数据（processed/） | ❌ 忽略 | ✅ | ✅（如需） | ❌ |
 | 运行时过程件（_workspace/） | ❌ 忽略 | ✅ | ❌ | ❌ |
+| 模拟盘运行数据（paper/） | ❌ 忽略 | ✅ | ❌ | ❌ |
+| 操盘手会话采集（operator_recall/，含原话、敏感） | ❌ 忽略 | ✅ | ❌ | ❌ |
 | 回测/分析结果（results/） | ❌ 忽略 | ✅ | ❌ | ❌ |
 | 知识成品/报告 | ✅（01_结论与产出/） | — | — | ✅（如需同步） |
 | 凭证/密钥（环境变量、config/local_*） | ❌ 忽略 | ✅（仅本地，不入库） | ❌ | ❌ |
@@ -42,10 +44,12 @@ astock-quant/
 ├── scripts/                    # 可执行脚本（下载/回测/扫描/体检，清单见文档地图）
 ├── tests/                      # 测试
 ├── notebooks/                  # Jupyter研究（命名加日期前缀）
-├── data/                       # 数据（整体gitignore）
+├── data/                       # 数据（整体gitignore；本目录导航见 data/README.md，数据资产见 docs/数据资产清单.md）
 │   ├── raw/                    # 原始数据（只读，绝不修改）
-│   ├── processed/              # 处理后数据
-│   └── _workspace/             # 运行时过程件（可随时清理）
+│   ├── processed/              # 处理后数据（清洗/特征）
+│   ├── paper/                  # 模拟盘运行数据（持仓/信号/成交快照）
+│   ├── operator_recall/        # 操盘手跨会话增量采集（inbox 原文 + state.json 游标，外脑用，敏感不入库）
+│   └── _workspace/             # 运行时过程件（状态/日志/清单，可随时清理）
 ├── results/                    # 回测/分析结果（不入库）
 ├── docs/                       # 工程文档（完整清单见 DOCUMENTATION_MAP.md）
 │   ├── WORKFLOW.md / REQUIREMENTS.md / HANDOFF.md
@@ -83,9 +87,21 @@ astock-quant/
 - 格式优先 parquet（压缩率高、读取快）
 
 ### 3.3 _workspace/ — 运行时过程件
-- 下载临时文件、中间结果、断点状态、日志
-- 可随时清理，不影响成品
+- 下载临时文件、中间结果、断点状态、日志（`download_status_*.json`、`stock_list.csv`、`*.log`）
+- 可随时清理，不影响成品（清理后下载按磁盘 CSV 断点重建）
 - 不传网盘、不同步飞书
+
+### 3.4 paper/ — 模拟盘运行数据
+- 价值/成长等策略模拟盘的每日持仓、买卖信号、成交流水、净值快照
+- 由 `scripts/run_paper_trading.py`、`src/execution/paper_trading.py` 写入；当前为空（T27 待全量增量补齐后启动）
+- 只本地、不入库
+
+### 3.5 operator_recall/ — 操盘手会话增量采集（外脑用）
+- `inbox/`：从操盘手其它任务窗口增量采集的对话原文（一条一个 md）；`state.json`：游标，记录上次读到哪个会话哪条，下次续看不全量
+- 配套 `scripts/scan_operator_sessions.py` 与 `docs/外脑-操盘手会话增量采集SOP.md`
+- 含操盘手原话、可能敏感，只本地、不入库、不传网盘/飞书；沉淀后的"成品经验"才进 `09_调研底稿与素材/操盘手经验/`（入库）
+
+> data/ 另有一个本机导航文件 `data/README.md`（被 gitignore、不入库），只做子目录速览与指路；数据"有什么、什么口径、为什么下"的权威说明是 `docs/数据资产清单.md`，不在此重复。
 
 ## 四、docs/ 目录说明
 
@@ -127,7 +143,7 @@ astock-quant/
 
 ### 5.3 目录命名
 
-- **工程目录英文**（小写、无空格）：`scripts/ src/ config/ data/ results/ tests/ notebooks/ docs/`；data 内桶名英文固定：`raw/{daily,minute,etf,fundamentals}/`、`processed/`、`_workspace/`。
+- **工程目录英文**（小写、无空格）：`scripts/ src/ config/ data/ results/ tests/ notebooks/ docs/`；data 内桶名英文固定：`raw/{daily,minute,etf,fundamentals,guba}/`、`processed/`、`paper/`、`operator_recall/`、`_workspace/`。
 - **六槽位治理/内容目录中文 + 两位数字前缀**：`00_项目总纲.md`、`01_结论与产出/`、`02_决策记录/`、`03_进行中的任务/`、`09_调研底稿与素材/`、`99_复盘与退役总结/`；其下专题子目录同样中文（`操盘手经验/`、`竞品视频/`、`3号池扫描/`）。
 - 目录风格与其中文件的风格**相互独立**（中文目录里可以放英文大写台账，如 `03_进行中的任务/TASK_STATUS.md`）。
 
