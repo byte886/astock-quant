@@ -72,13 +72,14 @@ class PaperAccount:
         # 2) 按新目标等权买入（扣买入成本：佣金+滑点）
         if available <= 0 or not target:
             return []
-        w_each = available / len(target)
+        # 每只预算预留买入佣金+滑点，避免满仓买入后现金小幅为负
+        budget_each = available / len(target) / (1 + COMMISSION + SLIPPAGE)
         new_holdings, buy_val = {}, 0.0
         for code in target:
             px = open_row.get(code, np.nan)
             if not np.isfinite(px) or px <= 0:
                 continue
-            sh = int(w_each / px)  # 整手按股
+            sh = int(budget_each / px)  # 整手按股（向下取整再留余量）
             if sh <= 0:
                 continue
             new_holdings[code] = sh

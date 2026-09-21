@@ -98,8 +98,27 @@ def get_etf_list():
     sys.exit(1)
 
 
+def _download_one_etf_sina(code):
+    """新浪 ETF 日线回退源（东财 push2his 断连时使用）。
+
+    新浪返回英文列 date/open/high/low/close/volume，无 amount/turn/pctChg；
+    基准 load_benchmark 只用 date/close，缺列不影响。
+    """
+    symbol = code.replace(".", "")  # sh.510300 -> sh510300
+    df = ak.fund_etf_hist_sina(symbol=symbol)
+    if df is None or len(df) == 0:
+        return None
+    df = df.copy()
+    df["date"] = df["date"].astype(str)
+    for col in ["open", "high", "low", "close", "volume"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["code"] = code
+    return df.sort_values("date").reset_index(drop=True)
+
+
 def download_one_etf(code, max_retry=3):
-    """下载单只ETF日线数据（AkShare），支持重试"""
+    """下载单只ETF日线数据（AkShare），支持重试；东财失败回退新浪。"""
     # code 格式：sh.510300 → 510300
     symbol = code.split(".")[1]
 
@@ -145,7 +164,17 @@ def download_one_etf(code, max_retry=3):
                 log(f"⚠️ {code} 下载失败，第 {attempt+1} 次重试（等待{wait_time}秒）：{e}")
                 time.sleep(wait_time)
                 continue
-            raise
+            # 东财重试耗尽，回退新浪源
+            log(f"⚠️ {code} 东方财富源重试耗尽，回退新浪源 ...")
+            try:
+                df_sina = _download_one_etf_sina(code)
+                if df_sina is not None and len(df_sina) > 0:
+                    log(f"✅ {code} 新浪源成功：{len(df_sina)} 条（{df_sina['date'].min()} ~ {df_sina['date'].max()}，缺成交额/换手率列）")
+                    return df_sina
+                return None
+            except Exception as e2:
+                log(f"❌ {code} 新浪回退源也失败：{e2}")
+                raise
 
 
 def save_etf_data(code, df):
@@ -174,6 +203,7 @@ def full_download(args):
     status["total_etfs"] = total
 
     consecutive_fails = 0  # 连续失败计数
+    run_failed = 0  # 本次运行失败数（异常计失败；--etf 单只模式下无数据也计失败）
 
     for idx, row in df_etfs.iterrows():
         code = row["code"]
@@ -202,6 +232,8 @@ def full_download(args):
                 log(f"{progress} ⚠️ {code} 无数据，跳过")
                 status["skipped"].append(code)
                 consecutive_fails = 0
+                if args.etf:
+                    run_failed += 1
             else:
                 filepath = save_etf_data(code, df)
                 log(f"{progress} ✅ {code} 完成：{len(df)} 条记录（{df['date'].min()} ~ {df['date'].max()}）")
@@ -211,6 +243,7 @@ def full_download(args):
             log(f"{progress} ❌ {code} 失败：{e}")
             status["failed"].append(code)
             consecutive_fails += 1
+            run_failed += 1
 
         save_status(status)
         time.sleep(random.uniform(INTERVAL_MIN, INTERVAL_MAX))
@@ -221,6 +254,7 @@ def full_download(args):
     log("=" * 60)
     log(f"ETF下载完成：成功 {len(status['completed'])}，失败 {len(status['failed'])}，跳过 {len(status['skipped'])}")
     log("=" * 60)
+    return run_failed
 
 
 def check_data_quality(args):
@@ -280,9 +314,12 @@ def main():
 
     if args.check:
         check_data_quality(args)
-    else:
-        full_download(args)
+        return 0
+
+    run_failed = full_download(args)
+    # 有失败时返回非零退出码，供盘后编排脚本捕获（单步失败不阻断但 rc 汇总需真实）
+    return 1 if run_failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

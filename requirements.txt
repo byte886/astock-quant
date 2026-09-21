@@ -4,7 +4,8 @@ pandas>=2.2
 numpy>=1.26
 baostock==0.9.3
 matplotlib>=3.8
+akshare>=1.18.97   # ETF 日线（东财，失败回退新浪）、外部数据探针；盘后编排必用
+tabulate>=0.9      # pandas DataFrame.to_markdown（归因报告等）
 
 # 可选（仅特定脚本用到，不需要可跳过）：
-# akshare        # scripts/download_etf_akshare.py 等补充数据
 # playwright     # scripts/download_etf_playwright.py（浏览器采集，需再 playwright install）

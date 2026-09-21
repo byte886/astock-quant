@@ -49,13 +49,18 @@ def main():
         })
         acct.save()
     else:
-        # 日常：逐日推进（执行 pending→盯市→月末新信号）
-        for d in dates:
-            if acct.state["pending_target"] and d > pd.Timestamp(acct.state.get("last_exec") or "2000-01-01"):
-                if d in open_.index:
-                    o = open_.loc[d]
-                    acct.execute_pending(o, o)
-                    acct.state["last_exec"] = d.strftime("%Y-%m-%d")
+        # 日常：只推进上次记录日之后的新交易日（幂等，重复跑不重复记账）
+        last_done = pd.Timestamp(acct.state["nav_history"][-1]["date"])
+        todo = [d for d in dates if d > last_done]
+        for d in todo:
+            # pending 只能在【信号日的下一交易日】开盘成交：
+            # 信号是信号日盘后才产生的，信号日当天开盘尚不存在，严禁当天成交（未来函数）
+            sig = acct.state.get("pending_signal_date")
+            if (acct.state["pending_target"] and sig
+                    and d > pd.Timestamp(sig) and d in open_.index):
+                acct.execute_pending(open_.loc[d], open_.loc[d])
+                acct.state["last_exec"] = d.strftime("%Y-%m-%d")
+            # 当日收盘盯市
             if d in close.index:
                 nav = acct.nav(close.loc[d])
                 acct.state["nav_history"].append({
@@ -64,7 +69,9 @@ def main():
                     "cash": round(acct.state["cash"], 2),
                     "value": round(acct.market_value(close.loc[d]), 2),
                 })
-            is_month_end = (d.month != dates[dates.index(d) + 1].month) if dates.index(d) + 1 < len(dates) else True
+            # 当月最后交易日盘后且无待执行信号 → 出新月度信号（次月开盘成交）
+            idx = dates.index(d)
+            is_month_end = (d.month != dates[idx + 1].month) if idx + 1 < len(dates) else True
             if is_month_end and (acct.state["pending_signal_date"] is None):
                 ranked, _ = fm.select(d, panels, factor="value", top_n=15)
                 if ranked:

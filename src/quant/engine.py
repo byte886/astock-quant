@@ -66,7 +66,10 @@ def _tradable_open(code, td, panels, want_buy):
 
 
 def run_backtest(panels, factor_model, factor="value", top_n=15,
-                 start="2015-01-01", end=None):
+                 start="2015-01-01", end=None, market_filter=None):
+    """market_filter：可选 callable(信号日 d, panels) -> bool。
+    返回 True 时该期目标为空（能卖的都卖出、转现金），用于市场择时归因。
+    默认 None = 行为与原回测完全一致。"""
     close = panels["close"]
     dates = close.index
     dates = dates[(dates >= pd.Timestamp(start))]
@@ -198,8 +201,11 @@ def run_backtest(panels, factor_model, factor="value", top_n=15,
 
         # ---------- 信号日盘后选股，次日执行 ----------
         if d in sig2exec:
-            ranked, _ = factor_model.select(d, panels, factor=factor, top_n=top_n)
-            pending_target = [c for c, _ in ranked]
+            if market_filter is not None and market_filter(d, panels):
+                pending_target = []          # 择时过滤：本期空仓转现金
+            else:
+                ranked, _ = factor_model.select(d, panels, factor=factor, top_n=top_n)
+                pending_target = [c for c, _ in ranked]
             pending_sig = d
 
     nav_df = pd.DataFrame(nav_records).set_index("date")

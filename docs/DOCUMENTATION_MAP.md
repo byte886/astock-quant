@@ -104,7 +104,7 @@
 | 类别 | 路径 | 说明 |
 |---|---|---|
 | 竞品视频 | `09_调研底稿与素材/竞品视频/` | 竞品需求输入文档 + 转写稿 |
-| 操盘手经验 | `09_调研底稿与素材/操盘手经验/` | 经验沉淀文档 + 编号归档（已到 126，持续追加；原始素材只读） |
+| 操盘手经验 | `09_调研底稿与素材/操盘手经验/` | 经验沉淀文档 + 编号归档（已到 128，持续追加；127/128 原文存 `raw/`；原始素材只读） |
 | 已有讨论整理 | `09_调研底稿与素材/已有讨论整理.md` | 量化讨论归纳 |
 | 参考资料 | `09_调研底稿与素材/references/` | 引用链接、参考资料 |
 
@@ -129,11 +129,17 @@
 | 数据下载 | `scripts/download_monitor.py` | launchd 每 15 分钟自愈巡检、失败补下 |
 | 数据下载 | `scripts/download_fundamentals.py` | 中证800 财务三表（profit/growth/dividend） |
 | 数据下载 | `scripts/download_csi800_daily.py` | 中证800 成分日线补齐 |
-| 数据下载 | `scripts/download_etf.py` / `download_etf_akshare.py` / `download_etf_playwright.py` | ETF 行情多通道（baostock/akshare/浏览器兜底） |
+| 数据下载 | `scripts/download_etf.py` / `download_etf_akshare.py` / `download_etf_playwright.py` | ETF 行情多通道（baostock/akshare/浏览器兜底）；akshare 东财失败自动回退新浪源、失败返回 rc=1 |
+| 数据下载 | `scripts/update_daily_after_close.py` | 盘后增量补个股日线（`--codes/--lookback`，幂等扫描，失败 exit 1） |
 | 数据探测 | `scripts/probe_fundamental_data.py` | 财务数据字段/可用性探测 |
+| 数据探测 | `scripts/probe_external_data.py` | akshare 外部通道探测（东财 datacenter/push2、新浪资金流/ETF、同花顺行业概念；SIGALRM 超时，报告 results/external_data_probe/） |
 | 回测 | `scripts/run_multifactor_backtest.py` | 多因子回测（`--factor value/growth/both --top 15 --start`） |
 | 回测 | `scripts/backtest_etf_rotation.py` | ETF 轮动回测 |
-| 模拟盘 | `scripts/run_paper_trading.py` | 价值策略模拟盘（次日开盘成交、盘后信号） |
+| 研究验证 | `scripts/attribute_growth_drawdown.py` | T28 成长策略 -60% 回撤归因+改进变体回测（A估值/B质量/C择时/D估值+择时/E质量+择时），产物 results/growth_attribution/ |
+| 模拟盘 | `scripts/run_paper_trading.py` | 价值策略模拟盘（建仓首跑 + 日常增量推进：T日盘后信号、T+1开盘成交、收盘盯市、月末新信号） |
+| 模拟盘 | `src/execution/paper_trading.py` | 模拟盘账户/撮合/成本引擎（佣金万2.5+卖出印花税千1+滑点千1） |
+| 测试 | `tests/test_paper_trading_daily.py` | 模拟盘日常逻辑自检（信号日不成交/T+1开盘成交/幂等/月末新信号四场景，标准库无依赖） |
+| 自动化 | `scripts/daily_after_close.sh` | 盘后编排三步（增量补日线→ETF基准补记→模拟盘推进），launchd 周一至五 18:30 触发（T27.2） |
 | 外脑 | `scripts/pool3_scan.py` | 3号池扫描器（量比/TRIX/位置/突破/试盘，1/2号评级） |
 | 外脑 | `scripts/scan_operator_sessions.py` | 操盘手其它任务窗口增量采集（游标续读，见增量采集SOP） |
 | 外脑 | `scripts/session_history.py` | 单会话历史导出（早期版，跨会话优先用 local-trajectory-recall 技能） |
