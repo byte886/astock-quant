@@ -24,7 +24,7 @@
 ### 数据下载与管理
 1. 数据下载：`scripts/download_data.py`（baostock 日线/5分钟，断点续传）+ `scripts/download_monitor.py`（launchd 自愈巡检）；流程见 `docs/WORKFLOW.md` 阶段①，口径见 `docs/数据资产清单.md`
 2. 数据来源与凭证：`AGENTS.md` 第3节
-3. 目录结构与存储分工：`docs/DIRECTORY_STRUCTURE.md` 第三节
+3. 目录结构与存储分工：`docs/DIRECTORY_STRUCTURE.md` §〇；文件/目录命名规范：同文档 §五（唯一事实源）
 
 ### 框架与因子方案（已定，留档）
 1. 量化框架：已决策**自研 pandas 轻量引擎**（`src/quant/`），不引入 qlib/vn.py，理由见 `docs/HANDOFF.md` §2 与 ADR
@@ -74,11 +74,11 @@
 | 操盘手会话增量采集SOP | `docs/外脑-操盘手会话增量采集SOP.md` | 增量、记忆触发地扫操盘手其它任务窗口，游标续读、去重、归档编号、结构化提炼 |
 | 项目维护SOP | `docs/项目维护SOP.md` | 沉淀收拢路由、维护节奏、文档变更矩阵、文档体检、新窗口冷启动验收六问 |
 | 新窗口接手开场白 | `docs/新窗口接手开场白.md` | 开新任务窗口固定 SOP：触发词、老窗口收口清单、本机两步开窗（选文件夹+标准句）、六问验收、他人/网页兜底整段 |
-| 目录结构 | `docs/DIRECTORY_STRUCTURE.md` | 存储分工、各目录职责、命名规则 |
+| 目录结构与命名规范 | `docs/DIRECTORY_STRUCTURE.md` | 存储分工、各目录职责；§五 文件与目录命名规范（唯一事实源） |
 | ETF轮动策略 | `docs/strategies/ETF轮动策略_v0.1.md` | MVP策略设计稿（候选池/调仓/选股/风控） |
 | 多因子选股策略 | `docs/strategies/多因子选股策略_v0.1.md` | 价值(股息率)/成长(YOYNI+ROE)因子、月度调仓、回测口径（G2：价值 Conditional Go、成长 Hold） |
 | 舆情因子与模拟盘 | `docs/strategies/舆情因子与模拟盘设计_v0.1.md` | 股吧情绪反向指标+历史数据验证方案+模拟盘设计（单维度已验证不稳健，C2 挂起） |
-| 3号池扫描报告 | `01_结论与产出/3号池扫描/` | 外脑抓手 pool3_scan 的人读评级报告（定稿归档；明细 CSV 在本地 results/） |
+| 3号池扫描报告 | `01_结论与产出/3号池扫描/3号池扫描报告_2026-09-18.md` | 外脑抓手 pool3_scan 的人读评级报告（定稿归档；明细 CSV 在本地 results/） |
 
 ### 一、项目治理（六槽位）
 
@@ -112,7 +112,7 @@
 |------|------|------|
 | 工作流 | `docs/WORKFLOW.md` | 四阶段流水线 + 校验门 + SOP链接 |
 | 需求 | `docs/REQUIREMENTS.md` | 功能需求清单 + 验收标准 |
-| 目录结构 | `docs/DIRECTORY_STRUCTURE.md` | 存储分工 + 各目录职责 |
+| 目录结构与命名规范 | `docs/DIRECTORY_STRUCTURE.md` | 存储分工 + 各目录职责；§五 命名规范唯一事实源 |
 | 文档地图 | `docs/DOCUMENTATION_MAP.md` | 本文档 |
 
 ---
@@ -146,6 +146,7 @@
 | 资源 | 链接/路径 | 说明 |
 |---|---|---|
 | 高顿 CPA 知识库 | `~/Doubao/chats/2026-08-26/new-chat/gaodun-course-knowledge-base/` | 方法论参考 |
+| 会计仓（高配参考） | `~/Desktop/accounting-kb/` | 项目管理高配实例（命名规范落地版 §9、自动检查脚本），本仓 §五 蓝本之一 |
 | 内容流水线 | `~/Desktop/multiplatform-content-pipeline/` | 内容采集+知识提取参考（含 domains/stock/） |
 | 项目管理技能 | `~/Doubao/skills/project-manager/` | 本项目结构和模板来源 |
 | Baostock | http://baostock.com | A股免费数据源 |
