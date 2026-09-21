@@ -3,7 +3,7 @@
 > 文档类型：Reference（参考资料）
 > 更新频率：目录结构变更时
 > 读者：AI代理 + 人类
-> 最后更新：2026-09-16
+> 最后更新：2026-09-21
 
 ## 〇、存储分工总表（先看这张）
 
@@ -15,7 +15,7 @@
 | 运行时过程件（_workspace/） | ❌ 忽略 | ✅ | ❌ | ❌ |
 | 回测/分析结果（results/） | ❌ 忽略 | ✅ | ❌ | ❌ |
 | 知识成品/报告 | ✅（01_结论与产出/） | — | — | ✅（如需同步） |
-| 加密凭证 .secrets/*.enc | ✅ | ✅ | ❌ | ❌ |
+| 凭证/密钥（环境变量、config/local_*） | ❌ 忽略 | ✅（仅本地，不入库） | ❌ | ❌ |
 
 **一句话**：Git 只放"怎么做"的工程资产 + 结论性文档；"原料和过程件"在本地 data/，不入库。
 
@@ -36,14 +36,10 @@ astock-quant/
 ├── AGENTS.md                   # AI操作手册（命令式）
 ├── .gitignore
 ├── src/                        # 源代码
-│   ├── data/                   # 数据获取与清洗
-│   ├── features/               # 因子工程
-│   ├── strategies/             # 策略实现
-│   ├── backtest/               # 回测引擎
-│   ├── execution/              # 执行/下单
-│   └── risk/                   # 风险管理
-├── config/                     # 配置文件（default_*.py 入库，local_*.py 不入库）
-├── scripts/                    # 可执行脚本（数据下载、批量任务等）
+│   ├── quant/                  # 量化核心：data/factors/engine/metrics/viz
+│   └── execution/              # 执行层：paper_trading 模拟盘
+├── config/                     # 配置（default_*、池子csv 入库；local_* 不入库；密钥走环境变量）
+├── scripts/                    # 可执行脚本（下载/回测/扫描/体检，清单见文档地图）
 ├── tests/                      # 测试
 ├── notebooks/                  # Jupyter研究（命名加日期前缀）
 ├── data/                       # 数据（整体gitignore）
@@ -54,10 +50,10 @@ astock-quant/
 ├── docs/                       # 工程文档
 │   ├── WORKFLOW.md             # 工作流总纲
 │   ├── REQUIREMENTS.md         # 需求与验收标准
+│   ├── 项目维护SOP.md           # 沉淀收拢/文档体检/冷启动验收
 │   ├── DIRECTORY_STRUCTURE.md  # 本文档
 │   └── DOCUMENTATION_MAP.md    # 文档地图
-├── .secrets/                   # 加密凭证（待创建，明文不入库）
-└── requirements.txt            # Python依赖（待创建）
+└── requirements.txt            # Python依赖（pip install -r requirements.txt）
 ```
 
 ## 二、治理目录位置说明
@@ -80,7 +76,7 @@ astock-quant/
 ### 3.1 raw/ — 原始数据（只读，绝不修改）
 - 从数据源下载的原始文件，保持原样
 - 命名：`<数据源>_<标的>_<时间范围>.<扩展名>`，如 `baostock_sh.600519_daily_1990-2026.csv`
-- 按数据类型分子目录：`raw/daily/`（日线）、`raw/weekly/`（周线）、`raw/financial/`（财务）、`raw/stock_list/`（股票列表）
+- 按数据类型/市场分目录（实际）：`raw/daily/{sh,sz}/`（个股日线）、`raw/minute/{sh,sz}/`（个股5分钟线）、`raw/etf/{daily,minute}/{sh,sz}/`（ETF 行情）、`raw/fundamentals/{profit,growth,dividend}/`（财务三表）；单文件如 `sh.600519.csv`（前复权、baostock 18 字段）
 
 ### 3.2 processed/ — 处理后数据
 - 经过清洗/转换/特征工程的数据

@@ -222,7 +222,7 @@
 - 需求文档：[REQUIREMENTS.md](../REQUIREMENTS.md)（Q1 已决策：先 ETF 轮动，再多因子选股）
 - 工作流：[WORKFLOW.md](../WORKFLOW.md)（阶段③策略研发）
 - 数据目录：`data/raw/etf/daily/`
-- 策略代码（待创建）：`src/strategies/etf_rotation.py`
+- 回测脚本：`scripts/backtest_etf_rotation.py`（量化核心在 `src/quant/`）
 
 ---
 

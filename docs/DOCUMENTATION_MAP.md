@@ -3,7 +3,7 @@
 > 文档类型：Reference（参考资料 — 文档索引）
 > 更新频率：每次新增/删除/移动文档时
 > 读者：AI代理（快速定位文档）和人类（查找文档时）
-> 最后更新：2026-09-16
+> 最后更新：2026-09-21
 
 > 本文档是项目所有文档的导航入口，告诉AI和人"先读什么、去哪里找什么"。
 
@@ -21,7 +21,7 @@
 4. 跨会话稳定结论：（工程记忆暂未启用，需要时查 ADR）
 
 ### 数据下载与管理
-1. 数据下载SOP：`scripts/download_data.py`（待创建）+ `docs/WORKFLOW.md` 阶段①
+1. 数据下载：`scripts/download_data.py`（baostock 日线/5分钟，断点续传）+ `scripts/download_monitor.py`（launchd 自愈巡检）；流程见 `docs/WORKFLOW.md` 阶段①，口径见 `docs/数据资产清单.md`
 2. 数据来源与凭证：`AGENTS.md` 第3节
 3. 目录结构与存储分工：`docs/DIRECTORY_STRUCTURE.md` 第三节
 
@@ -43,10 +43,12 @@
 4. `AGENTS.md` 第3节 — 工具用法与坑（含已验证做不通的方向）
 
 ### 项目维护/文档更新
-1. 目录结构：`docs/DIRECTORY_STRUCTURE.md`
-2. ADR决策记录：`02_决策记录/`（做重要决策前先查历史）
-3. 治理卡：`02_决策记录/治理卡.md`
-4. 工作流：`docs/WORKFLOW.md`
+1. **怎么沉淀、怎么维护、新窗口怎么接手**：`docs/项目维护SOP.md`（沉淀收拢路由 + 维护节奏 + 变更矩阵 + 冷启动验收六问）
+2. 提交前体检（断链/空目录/登记覆盖/数据误入git）：`.venv/bin/python scripts/doc_health_check.py`
+3. 目录结构：`docs/DIRECTORY_STRUCTURE.md`
+4. ADR决策记录：`02_决策记录/`（做重要决策前先查历史）
+5. 治理卡：`02_决策记录/治理卡.md`
+6. 工作流：`docs/WORKFLOW.md`
 
 ---
 
@@ -68,9 +70,13 @@
 | 参与者画像 | `docs/参与者画像.md` | 项目里都有谁、各自角色/风格/怎么协作（含新增参与者SOP） |
 | 操盘手交易判断采集 | `docs/操盘手交易判断采集清单.md` | 外脑采集：按打法五要素设计问题，日常对话中把操盘手隐性判断采出来，建专属交易档案 |
 | 外脑落地SOP | `docs/外脑落地SOP.md` | 分阶段（阶段0-4）让炒股客用上"懂他的AI"：怎么一步步采、每次产出什么、怎么验收，与量子系统并行节奏 |
+| 操盘手会话增量采集SOP | `docs/外脑-操盘手会话增量采集SOP.md` | 增量、记忆触发地扫操盘手其它任务窗口，游标续读、去重、归档编号、结构化提炼 |
+| 项目维护SOP | `docs/项目维护SOP.md` | 沉淀收拢路由、维护节奏、文档变更矩阵、文档体检、新窗口冷启动验收六问 |
 | 目录结构 | `docs/DIRECTORY_STRUCTURE.md` | 存储分工、各目录职责、命名规则 |
 | ETF轮动策略 | `docs/strategies/ETF轮动策略_v0.1.md` | MVP策略设计稿（候选池/调仓/选股/风控） |
-| 舆情因子与模拟盘 | `docs/strategies/舆情因子与模拟盘设计_v0.1.md` | 股吧情绪反向指标+历史数据验证方案+模拟盘设计 |
+| 多因子选股策略 | `docs/strategies/多因子选股策略_v0.1.md` | 价值(股息率)/成长(YOYNI+ROE)因子、月度调仓、回测口径（G2：价值 Conditional Go、成长 Hold） |
+| 舆情因子与模拟盘 | `docs/strategies/舆情因子与模拟盘设计_v0.1.md` | 股吧情绪反向指标+历史数据验证方案+模拟盘设计（单维度已验证不稳健，C2 挂起） |
+| 3号池扫描报告 | `01_结论与产出/3号池扫描/` | 外脑抓手 pool3_scan 的人读评级报告（定稿归档；明细 CSV 在本地 results/） |
 
 ### 一、项目治理（六槽位）
 
@@ -111,10 +117,25 @@
 
 ## 工具清单（快速索引）
 
-| 工具 | 路径 | 用途 |
+> 统一用项目 venv 运行：`.venv/bin/python scripts/<x>.py`。新增/删除脚本必须回本表登记。
+
+| 分组 | 脚本 | 用途 |
 |---|---|---|
-| 数据下载脚本 | `scripts/download_data.py`（待创建） | Baostock 全量A股数据下载（防限流、断点续传） |
-| （待补充） | | |
+| 数据下载 | `scripts/download_data.py` | Baostock 个股日线/5分钟，前复权、断点续传、防限流（launchd 后台单例） |
+| 数据下载 | `scripts/download_monitor.py` | launchd 每 15 分钟自愈巡检、失败补下 |
+| 数据下载 | `scripts/download_fundamentals.py` | 中证800 财务三表（profit/growth/dividend） |
+| 数据下载 | `scripts/download_csi800_daily.py` | 中证800 成分日线补齐 |
+| 数据下载 | `scripts/download_etf.py` / `download_etf_akshare.py` / `download_etf_playwright.py` | ETF 行情多通道（baostock/akshare/浏览器兜底） |
+| 数据探测 | `scripts/probe_fundamental_data.py` | 财务数据字段/可用性探测 |
+| 回测 | `scripts/run_multifactor_backtest.py` | 多因子回测（`--factor value/growth/both --top 15 --start`） |
+| 回测 | `scripts/backtest_etf_rotation.py` | ETF 轮动回测 |
+| 模拟盘 | `scripts/run_paper_trading.py` | 价值策略模拟盘（次日开盘成交、盘后信号） |
+| 外脑 | `scripts/pool3_scan.py` | 3号池扫描器（量比/TRIX/位置/突破/试盘，1/2号评级） |
+| 外脑 | `scripts/scan_operator_sessions.py` | 操盘手其它任务窗口增量采集（游标续读，见增量采集SOP） |
+| 外脑 | `scripts/session_history.py` | 单会话历史导出（早期版，跨会话优先用 local-trajectory-recall 技能） |
+| 舆情(C2挂起) | `scripts/fetch_guba_sentiment.py` / `analyze_guba_sentiment.py` / `verify_sentiment_contrarian.py` | 股吧发帖采集/情绪指数/反向指标验证（单维度已证不稳健） |
+| 项目维护 | `scripts/doc_health_check.py` | 文档健康度体检（断链/空目录/登记覆盖/数据误入git），提交前跑 |
+| 自动化 | `scripts/auto_run_when_ready.py` | 数据就绪后自动触发回测/扫描 |
 
 ---
 
