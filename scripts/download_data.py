@@ -184,6 +184,37 @@ def baostock_reconnect():
         return False
 
 
+def baostock_login(max_retry=3, timeout=60):
+    """带超时和重试的登录，防止 bs.login() 在网络异常时无限挂起。
+
+    返回 True/False；失败由调用方以非0码退出，便于 launchd/监控识别并稍后重启。
+    """
+    for attempt in range(max_retry + 1):
+        try:
+            signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(timeout)
+            lg = bs.login()
+            signal.alarm(0)
+            if lg.error_code == '0':
+                log("✅ Baostock 登录成功")
+                return True
+            log(f"⚠️ Baostock 登录返回 {lg.error_code}: {lg.error_msg}，"
+                f"第 {attempt + 1}/{max_retry + 1} 次重试")
+        except DownloadTimeout:
+            signal.alarm(0)
+            log(f"⏰ Baostock 登录 {timeout}s 超时，第 {attempt + 1}/{max_retry + 1} 次重试")
+            try:
+                bs.logout()
+            except Exception:
+                pass
+        except Exception as e:
+            signal.alarm(0)
+            log(f"⚠️ Baostock 登录异常：{e}，第 {attempt + 1}/{max_retry + 1} 次重试")
+        time.sleep(8)
+    log("❌ Baostock 多次登录均失败，本轮放弃（监控稍后会自动重启重试）")
+    return False
+
+
 def download_one_stock(code, start_date, end_date, freq, max_retry=2):
     """下载单只股票数据，支持断线重连重试和超时保护"""
     cfg = FREQ_CONFIG[freq]
@@ -264,12 +295,9 @@ def full_download(args):
     log(f"数据目录：{cfg['data_dir']}" + (f" 和 {FREQ_CONFIG['minute']['data_dir']}" if freq == "both" else ""))
     log("=" * 60)
 
-    # 登录
-    lg = bs.login()
-    if lg.error_code != '0':
-        log(f"❌ Baostock 登录失败：{lg.error_code} - {lg.error_msg}")
-        sys.exit(1)
-    log("✅ Baostock 登录成功")
+    # 登录（带超时与重试，防止 login() 无限挂起）
+    if not baostock_login():
+        sys.exit(2)
 
     # 获取股票列表
     df_stocks = get_stock_list()
@@ -287,6 +315,18 @@ def full_download(args):
         if not status_minute["started_at"]:
             status_minute["started_at"] = datetime.now().isoformat()
         status_minute["total_stocks"] = total
+
+    # 断点续传清洗：completed/skipped 去重；上一轮 failed 的股票磁盘上没有文件，
+    # 本轮重新尝试（靠 code not in completed 进入下载），failed 只记录本*轮*失败，
+    # 避免"中断造成的假失败"被永久当成已处理而不再重试。
+    statuses_to_clean = [status_daily] + ([status_minute] if status_minute else [])
+    for st in statuses_to_clean:
+        st["completed"] = list(dict.fromkeys(st.get("completed", [])))
+        st["skipped"] = list(dict.fromkeys(st.get("skipped", [])))
+        prev_failed = len(set(st.get("failed", [])))
+        if prev_failed:
+            log(f"检测到上一轮失败 {prev_failed} 只，本轮将重新尝试下载")
+        st["failed"] = []
 
     # 确定结束日期
     end_date = datetime.now().strftime("%Y-%m-%d")
@@ -319,14 +359,19 @@ def full_download(args):
 
                 if df is None or len(df) == 0:
                     log(f"{progress} [日线] ⚠️ {code} 无数据，跳过")
-                    status_daily["skipped"].append(code)
+                    if code not in status_daily["skipped"]:
+                        status_daily["skipped"].append(code)
                 else:
                     filepath = save_stock_data(code, df, "daily")
                     log(f"{progress} [日线] ✅ {code} 完成：{len(df)} 条记录")
-                    status_daily["completed"].append(code)
+                    if code not in status_daily["completed"]:
+                        status_daily["completed"].append(code)
+                    if code in status_daily["failed"]:
+                        status_daily["failed"].remove(code)
             except Exception as e:
                 log(f"{progress} [日线] ❌ {code} 失败：{e}")
-                status_daily["failed"].append(code)
+                if code not in status_daily["failed"]:
+                    status_daily["failed"].append(code)
             save_status("daily", status_daily)
             sleep_interval("daily")
 
@@ -338,14 +383,19 @@ def full_download(args):
 
                 if df is None or len(df) == 0:
                     log(f"{progress} [分钟线] ⚠️ {code} 无数据，跳过")
-                    status_minute["skipped"].append(code)
+                    if code not in status_minute["skipped"]:
+                        status_minute["skipped"].append(code)
                 else:
                     filepath = save_stock_data(code, df, "minute")
                     log(f"{progress} [分钟线] ✅ {code} 完成：{len(df)} 条记录")
-                    status_minute["completed"].append(code)
+                    if code not in status_minute["completed"]:
+                        status_minute["completed"].append(code)
+                    if code in status_minute["failed"]:
+                        status_minute["failed"].remove(code)
             except Exception as e:
                 log(f"{progress} [分钟线] ❌ {code} 失败：{e}")
-                status_minute["failed"].append(code)
+                if code not in status_minute["failed"]:
+                    status_minute["failed"].append(code)
             save_status("minute", status_minute)
             sleep_interval("minute")
 
@@ -375,11 +425,8 @@ def incremental_update(args):
     log(f"开始{cfg['label']}增量更新（只下载新数据）")
     log("=" * 60)
 
-    lg = bs.login()
-    if lg.error_code != '0':
-        log(f"❌ Baostock 登录失败：{lg.error_code} - {lg.error_msg}")
-        sys.exit(1)
-    log("✅ Baostock 登录成功")
+    if not baostock_login():
+        sys.exit(2)
 
     status = load_status(freq)
     if not status["completed"]:

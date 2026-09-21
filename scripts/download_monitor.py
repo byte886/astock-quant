@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 """
-下载监控脚本：自动管理数据下载流程
-1. 监控 ETF 5分钟线下载，挂了自动重启
-2. ETF 5分钟线完成后，自动切换到个股下载
-3. 个股下载优先补失败的，再继续未完成的
+下载监控脚本（常驻，由 launchd 任务 com.astock-quant.download-monitor 管理）。
+
+架构（关键）：
+- 下载进程 download_data.py 是【独立的 launchd 任务】com.astock-quant.download-data，
+  由 launchd 直接管理（RunAtLoad 开机自启 + KeepAlive 崩溃自动重启）。
+  不要再用 subprocess.Popen 在监控脚本里派生孙子进程——launchd 作业里 Popen
+  出来的子进程会异常退出且无输出，这是踩过的坑。
+- 本监控只做两件事：
+  1) 以【磁盘实际有效 csv 文件】为准统计进度（只看文件大小，秒级），不信 failed 计数；
+  2) 若仍有缺失、而下载任务没在跑（跑完一遍 exit0 但还有网络失败股 / 被停 / 开机后没起），
+     用 `launchctl kickstart` 把独立下载任务重新拉起。
+- 全部覆盖后正常退出 exit0（launchd 配置 SuccessfulExit=false，不再被重启）。
+- 单例锁防止监控重复运行。
 """
+import csv
 import json
 import subprocess
 import time
@@ -14,159 +24,198 @@ import atexit
 from pathlib import Path
 from datetime import datetime
 
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PYTHON_BIN = str(PROJECT_ROOT / ".venv" / "bin" / "python")
 STATUS_DIR = PROJECT_ROOT / "data" / "_workspace"
-LOG_FILE = PROJECT_ROOT / "data" / "_workspace" / "download_monitor.log"
-LOCK_FILE = PROJECT_ROOT / "data" / "_workspace" / "download_monitor.lock"
+LOG_FILE = STATUS_DIR / "download_monitor.log"
+LOCK_FILE = STATUS_DIR / "download_monitor.lock"
+STOCK_LIST_FILE = STATUS_DIR / "stock_list.csv"
+DATA_RAW = PROJECT_ROOT / "data" / "raw"
 
-# ========== 单例锁：确保只有一个监控进程运行 ==========
+DATA_LABEL = "com.astock-quant.download-data"
+DATA_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{DATA_LABEL}.plist"
+ETF_TARGET = 1588
+CHECK_INTERVAL = 900          # 每15分钟巡检一次
+STALL_LIMIT = 20             # 连续20轮(约5小时)无增长则告警
+MIN_VALID_BYTES = 2048       # 有效csv最小字节（表头仅约200字节）
+
+# ========== 单例锁 ==========
 def acquire_lock():
     lock_path = Path(LOCK_FILE)
     if lock_path.exists():
         try:
             old_pid = int(lock_path.read_text().strip())
-            os.kill(old_pid, 0)  # 信号0=只检查进程是否存在
+            os.kill(old_pid, 0)
             print(f"[MONITOR] 已有监控进程运行中 (PID: {old_pid})，本实例退出", flush=True)
             sys.exit(0)
         except (OSError, ValueError):
-            lock_path.unlink()  # 旧进程已死，清理锁文件
+            lock_path.unlink()
     lock_path.write_text(str(os.getpid()))
     atexit.register(lambda: lock_path.unlink(missing_ok=True))
 
-acquire_lock()
-# =====================================================
+# 注：加锁放在 __main__ 主入口，避免 import 本模块复用 kickstart 等函数时误触发单例退出。
+# =============================
 
 def log(msg):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    line = f"[{timestamp}] [MONITOR] {msg}"
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] [MONITOR] {msg}"
     print(line, flush=True)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
-def is_process_running(process_name):
-    """检查进程是否在运行"""
+def _uid():
+    return os.getuid()
+
+def is_download_running():
+    """下载进程是否在跑（pgrep，排除监控自身）"""
     try:
-        result = subprocess.run(["pgrep", "-f", process_name], capture_output=True, text=True)
-        return result.returncode == 0
-    except:
+        r = subprocess.run(["pgrep", "-f", "download_data.py"], capture_output=True, text=True)
+        if r.returncode != 0:
+            return False
+        me, parent = os.getpid(), os.getppid()
+        for tok in r.stdout.split():
+            try:
+                pid = int(tok)
+            except ValueError:
+                continue
+            if pid not in (me, parent):
+                return True
+        return False
+    except Exception:
         return False
 
-def get_etf_minute_progress():
-    """获取ETF 5分钟线进度"""
+def ensure_data_job_loaded():
+    """确保下载 launchd 任务已加载（kickstart 找不到服务时兜底 load）"""
+    svc = f"gui/{_uid()}/{DATA_LABEL}"
+    r = subprocess.run(["launchctl", "print", svc], capture_output=True, text=True)
+    if r.returncode != 0 and DATA_PLIST.exists():
+        log("下载任务未加载，执行 launchctl load 装载")
+        subprocess.run(["launchctl", "load", str(DATA_PLIST)], capture_output=True, text=True)
+
+def kickstart_download():
+    """通过 launchd 启动（或重启）独立下载任务，天然单例"""
+    ensure_data_job_loaded()
+    svc = f"gui/{_uid()}/{DATA_LABEL}"
+    r = subprocess.run(["launchctl", "kickstart", svc], capture_output=True, text=True)
+    err = (r.stderr or r.stdout or "").strip()
+    if r.returncode == 0:
+        log(f"✅ 已通过 launchctl kickstart 拉起下载任务：{svc}")
+        return True
+    # already running 之类不算失败
+    if "already" in err.lower() or "running" in err.lower():
+        log("下载任务本就在运行")
+        return True
+    log(f"⚠️ kickstart 失败(rc={r.returncode})：{err}")
+    return False
+
+# ---------- 进度（以磁盘文件为准）----------
+def load_target_codes():
+    if not STOCK_LIST_FILE.exists():
+        return None
+    codes = []
+    with open(STOCK_LIST_FILE, "r", encoding="utf-8", newline="") as f:
+        for row in csv.DictReader(f):
+            c = (row.get("code") or "").strip()
+            if c:
+                codes.append(c)
+    return sorted(set(codes))
+
+def disk_has_data(code, freq):
+    subdir = "minute" if freq == "minute" else "daily"
+    exchange = code.split(".")[0]
+    p = DATA_RAW / subdir / exchange / f"{code}.csv"
+    try:
+        return p.exists() and p.stat().st_size > MIN_VALID_BYTES
+    except OSError:
+        return False
+
+def load_skipped(freq, targets):
+    f = STATUS_DIR / f"download_status_{freq}.json"
+    if not f.exists():
+        return set()
+    try:
+        d = json.load(open(f))
+        return set(d.get("skipped", [])) & set(targets)
+    except Exception:
+        return set()
+
+def get_progress(targets):
+    out = {}
+    for freq in ("daily", "minute"):
+        done = {c for c in targets if disk_has_data(c, freq)}
+        skipped = load_skipped(freq, targets)
+        covered = done | skipped
+        out[freq] = {"done": len(done), "skipped": len(skipped), "total": len(targets),
+                     "remaining": len(targets) - len(covered),
+                     "pct": len(done) / len(targets) * 100}
+    return out
+
+def etf_done():
     f = STATUS_DIR / "download_status_etf_minute.json"
     if not f.exists():
-        return None
-    d = json.load(open(f))
-    completed = len(d.get("completed", []))
-    failed = len(d.get("failed", []))
-    return {
-        "completed": completed,
-        "failed": failed,
-        "total": completed + failed,
-        "pct": completed / 1588 * 100
-    }
-
-def get_stock_progress():
-    """获取个股下载进度"""
-    results = {}
-    for freq, name in [("daily", "日线"), ("minute", "5分钟线")]:
-        f = STATUS_DIR / f"download_status_{freq}.json"
-        if not f.exists():
-            results[freq] = None
-            continue
-        d = json.load(open(f))
-        completed = len(d.get("completed", []))
-        failed = len(d.get("failed", []))
-        results[freq] = {
-            "completed": completed,
-            "failed": failed,
-            "total": completed + failed,
-            "pct": completed / 4889 * 100
-        }
-    return results
-
-def start_etf_minute_download():
-    """启动ETF 5分钟线下载"""
-    log("启动ETF 5分钟线下载...")
-    cmd = [PYTHON_BIN, "scripts/download_etf.py", "--freq", "minute"]
-    subprocess.Popen(cmd, cwd=PROJECT_ROOT,
-                     stdout=open(PROJECT_ROOT / "data/_workspace/etf_minute_stdout.log", "a"),
-                     stderr=subprocess.STDOUT)
-
-def start_stock_download():
-    """启动个股下载（both模式：日线+5分钟线）"""
-    log("启动个股下载（both模式）...")
-    cmd = [PYTHON_BIN, "scripts/download_data.py", "--freq", "both"]
-    subprocess.Popen(cmd, cwd=PROJECT_ROOT,
-                     stdout=open(PROJECT_ROOT / "data/_workspace/stock_stdout.log", "a"),
-                     stderr=subprocess.STDOUT)
+        return False
+    try:
+        return len(json.load(open(f)).get("completed", [])) >= ETF_TARGET
+    except Exception:
+        return False
 
 def main():
     log("=" * 60)
-    log("下载监控脚本启动")
+    log("下载监控脚本启动（launchd 双任务版 v3）")
     log("=" * 60)
+    if not etf_done():
+        log(f"⚠️ ETF 5分钟线尚未完成（目标{ETF_TARGET}），请先运行 download_etf.py；本监控暂只守护个股")
+    else:
+        log(f"✅ ETF 5分钟线已完成 {ETF_TARGET}/{ETF_TARGET}")
 
-    # 阶段：0=ETF分钟线, 1=个股下载
-    phase = 0
-    check_interval = 1800  # 30分钟检查一次
+    stall_rounds = 0
+    last_done = -1
 
     while True:
         try:
-            if phase == 0:
-                # 阶段0：ETF 5分钟线下载
-                progress = get_etf_minute_progress()
-                if progress:
-                    log(f"ETF 5分钟线进度：{progress['completed']}/1588 ({progress['pct']:.1f}%), 失败{progress['failed']}")
+            targets = load_target_codes()
+            if not targets:
+                log("⚠️ 股票列表不存在，尝试拉起下载任务以生成列表")
+                kickstart_download()
+            else:
+                prog = get_progress(targets)
+                d, m = prog["daily"], prog["minute"]
+                log(f"个股日线：{d['done']}/{d['total']} 文件 ({d['pct']:.1f}%)，"
+                    f"跳过{d['skipped']}，待补{d['remaining']}")
+                log(f"个股5分钟线：{m['done']}/{m['total']} 文件 ({m['pct']:.1f}%)，"
+                    f"跳过{m['skipped']}，待补{m['remaining']}")
 
-                    # 检查是否完成
-                    if progress["completed"] >= 1588:
-                        log("✅ ETF 5分钟线下载完成！切换到个股下载阶段")
-                        phase = 1
-                        time.sleep(5)  # 等待进程退出
-                        start_stock_download()
-                        continue
+                if d["remaining"] == 0 and m["remaining"] == 0:
+                    log("🎉 个股日线与5分钟线已全部覆盖，下载任务彻底完成，监控退出(exit 0)")
+                    break
 
-                    # 检查进程是否在运行
-                    if not is_process_running("download_etf.py"):
-                        log("⚠️ ETF 5分钟线下载进程未运行，自动重启")
-                        start_etf_minute_download()
+                running = is_download_running()
+                cur_done = d["done"] + m["done"]
+                if cur_done == last_done:
+                    stall_rounds += 1
                 else:
-                    log("⚠️ ETF 5分钟线状态文件不存在，启动下载")
-                    start_etf_minute_download()
-
-            elif phase == 1:
-                # 阶段1：个股下载
-                progress = get_stock_progress()
-                if progress.get("daily") and progress.get("minute"):
-                    d = progress["daily"]
-                    m = progress["minute"]
-                    log(f"个股日线进度：{d['completed']}/4889 ({d['pct']:.1f}%), 失败{d['failed']}")
-                    log(f"个股5分钟线进度：{m['completed']}/4889 ({m['pct']:.1f}%), 失败{m['failed']}")
-
-                    # 检查是否完成（完成+失败都算处理完）
-                    if d["total"] >= 4889 and m["total"] >= 4889:
-                        log("✅ 个股下载全部处理完成！")
-                        if d["failed"] > 0:
-                            log(f"⚠️ 仍有{d['failed']}只日线、{m['failed']}只5分钟线失败，下次可重试")
-                        break
-
-                    # 检查进程是否在运行
-                    if not is_process_running("download_data.py"):
-                        log("⚠️ 个股下载进程未运行，自动重启（断点续传）")
-                        start_stock_download()
+                    stall_rounds = 0
+                    last_done = cur_done
+                if stall_rounds >= STALL_LIMIT:
+                    log(f"🚨 连续{STALL_LIMIT}轮（约{STALL_LIMIT * CHECK_INTERVAL // 3600}小时）"
+                        f"无增长，可能被限流或网络长期不可用；强制 kickstart 重启下载任务一次")
+                    kickstart_download()
+                    stall_rounds = 0
+                elif not running:
+                    log("⚠️ 下载任务未运行且尚未完成，launchctl kickstart 重新拉起")
+                    kickstart_download()
                 else:
-                    log("⚠️ 个股状态文件不存在，启动下载")
-                    start_stock_download()
-
+                    log("下载任务运行中，本轮无需干预")
         except Exception as e:
             log(f"❌ 监控脚本出错：{e}")
 
-        time.sleep(check_interval)
+        time.sleep(CHECK_INTERVAL)
 
     log("=" * 60)
-    log("下载监控脚本结束")
+    log("下载监控脚本结束（全部完成，exit 0，launchd 不再重启）")
     log("=" * 60)
+    sys.exit(0)
 
 if __name__ == "__main__":
+    acquire_lock()
     main()

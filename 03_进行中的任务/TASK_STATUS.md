@@ -1,6 +1,6 @@
 # TASK_STATUS · 活跃任务台账
 
-> 最后更新：2026-09-20
+> 最后更新：2026-09-21
 > 本文件是"现在做到哪、下一步是什么"的唯一真相源。任务开始/完成/遇阻塞时立即更新。
 
 ## 战略方向（2026-09-19 拍板）
@@ -35,7 +35,7 @@ ETF 轮动初轮效果不佳（年化约 2.4%、最大回撤 -38%）后，确定
 | T22 | D 多因子回测系统 | AI | ✅ **正式回测已出**（见上表 G2 决策） |
 | T27 | 价值策略进模拟盘（B线启动） | AI | 🟡 下一步：搭模拟盘框架（100万虚拟、次日开盘、13:30复盘、盘后微信推信号） |
 | T28 | 成长策略回撤归因与改进 | AI | ⬜ Hold：分析 -60% 回撤来源，加择时/止损或换因子 |
-| T13 | 全量A股日线+5分钟线下载 | AI/launchd | ⏸️ 约21%；给回测让路暂停，后续再恢复 |
+| T13 | 全量A股日线+5分钟线下载 | AI/launchd | 🟢 **后台自愈下载中**（2026-09-21 重构，见下节）。ETF 5分钟线 100%；个股日线/分钟线以磁盘为准持续补齐，断点续传，崩溃/重启自动续跑，无需人工催 |
 
 ## D 回测系统（T22）已完成的代码
 
@@ -115,6 +115,54 @@ ETF 轮动初轮效果不佳（年化约 2.4%、最大回撤 -38%）后，确定
 | T25 | D 多因子策略规格定稿 | 2026-09-19 | `docs/strategies/多因子选股策略_v0.1.md` |
 | T22a | D 回测系统代码框架 | 2026-09-19 | `src/quant/` 五模块 + 入口脚本（小样本跑通） |
 | T26 | 财务下载挂 launchd（重启自动续） | 2026-09-19 | com.astock-quant.fundamentals（SuccessfulExit=false） |
+
+## 全量行情下载（T13）自愈架构（2026-09-21 重构）
+
+**背景**：下载自 9-20 中断后多次"假死"，总要人工催才继续。9-21 定位三处根因并彻底重构为 launchd 双任务，目标=后台稳定、崩溃/重启自动续、单例、下完为止、无需人工干预。
+
+**真实进度（以磁盘有效 csv 为准，持续增长；自查命令见下）**
+- ETF 5分钟线：1588/1588 = 100%（日线也已在 `data/raw/etf`，共 3176 文件）。
+- 个股目标 **4889 只**（baostock 全市场，正则留 `sh.6/sz.0/sz.3`、剔科创板 `sh.688`、天然不含北交所）。
+- 重构时点：个股日线约 1415/4889（29%）、5分钟线约 1042/4889（21%）；缺口从 sh.603050 连续开始（原中断点）。
+- 口径核查：`find ... -name '*688*'` 命中的全是代码含 688 数字的主板股/ETF（如 sh.601688 华泰证券、sh.600688 上海石化），**无真正科创板**；`bj/` 文件数 0。符合"剔科创、不要北交所"。
+
+**三处根因（均已修）**
+1. 旧监控毕业判据 `completed+failed>=总数` 把中断造成的**假失败当"处理完"直接退出**，失败股永不重试；且 break 在重启逻辑之前。→ 新监控**只认磁盘文件，failed 不参与毕业**，日线+分钟线 remaining 全为 0 才退出。
+2. `download_data.py` 裸 `bs.login()` 无超时，网络异常时无限挂起（重启即死、只打印标题的元凶）。→ 新增 `baostock_login(max_retry=3, timeout=60)`（SIGALRM 包裹、重试、最终失败 exit 2）。
+3. failed 列表只增不减、重试成功不移除、重跑重复 append，计数虚高且与磁盘/completed 大量重叠。→ **每轮启动清空上一轮 failed**（磁盘无文件即本轮重试），成功/失败/跳过全部去重、成功即移出 failed。
+
+**关键坑（务必记住）：不要在 launchd 作业里用 `subprocess.Popen` 派生下载孙子进程**——实测该子进程启动几秒内即死且无任何输出（start_new_session 也无效）；手动 nohup 正常。**正确做法是让下载本身成为独立 launchd 任务**。
+
+**双 launchd 任务架构（plist 在 `~/Library/LaunchAgents/`）**
+| 任务 Label | 跑什么 | 自愈策略 |
+|---|---|---|
+| `com.astock-quant.download-data` | `.venv/bin/python scripts/download_data.py --freq both` | RunAtLoad（开机/登录自启）；KeepAlive=`{SuccessfulExit:false}`（崩溃非0自动重启，正常跑完一遍 exit0 不重启）；ThrottleInterval=120；NetworkState=true（联网才跑、断网恢复再触发） |
+| `com.astock-quant.download-monitor` | `scripts/download_monitor.py`（磁盘为准统计+守护） | 每 15 分钟巡检：未完成且下载任务没在跑就 `launchctl kickstart` 拉起（任务被卸载也会自动 load 回来）；连续约 5 小时无增长强制 kickstart 一次；全完成才 exit0；自带单例锁 |
+
+- 单例：launchd 每个 Label 天然单例 + 监控 pgrep 去重 + 监控锁文件，保证同一时间只有一个下载进程。
+- 进度统计只看文件大小（>2KB 视为有效），近万文件 0.13 秒完成（旧版逐个数全文行数要扫约 9GB、卡几分钟）。
+- 行为：**开机登录后自动开跑；合盖休眠期间暂停，开盖/唤醒或重启登录后续跑**；单只网络失败记 failed，下一轮（跑完一遍后由监控 kickstart）自动重试，断点续传跳过已完成。
+- 备份：改前两脚本与旧 status JSON 在 `data/_workspace/backup_20260921/`。
+
+**常用运维命令**
+```bash
+cd ~/Desktop/astock-quant
+launchctl list | grep astock-quant                 # 看两个任务 PID（第二列；"-"=未运行）
+.venv/bin/python - <<'PY'                          # 看实时磁盘进度
+import sys; sys.path.insert(0,"scripts"); import download_monitor as m
+t=m.load_target_codes(); p=m.get_progress(t)
+for f in ("daily","minute"):
+    x=p[f]; print(f, x["done"],"/",x["total"],"待补",x["remaining"],f'({x["pct"]:.1f}%)')
+PY
+tail -f data/_workspace/download.log               # 下载明细
+tail -f data/_workspace/download_monitor.log       # 监控巡检
+# 手动停/启：launchctl unload|load ~/Library/LaunchAgents/com.astock-quant.download-data.plist
+# 手动拉起（任务已加载但没在跑）：launchctl kickstart gui/$(id -u)/com.astock-quant.download-data
+```
+
+**规模预估（baostock 实测）**：日线单只约 7 秒、5分钟线单只约 96–110 秒（约 7.8 万行）。日线剩余约数小时；**5分钟线全量约连续 4–5 天**（主瓶颈）；最终空间日线约 4G + 分钟线约 40G ≈ **44G**（磁盘 2.8T 可用，无压力）。当前月度策略主要用日线、回测池只需中证800（706只）；全量 5 分钟线是为"最完整"预留，**是否缩到中证800以节省 4–5 天/空间，待用户拍板（不影响后台继续跑）**。
+
+**fundamentals 财务任务**：`com.astock-quant.fundamentals` plist 存在但当前 **unload**（中证800 财务已基本下完：profit/growth 各706、dividend704）；避免与行情下载抢连接，需要补财务时再 load。
 
 ## 已启用模式
 
