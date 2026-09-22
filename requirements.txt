@@ -8,6 +8,7 @@ akshare>=1.18.97   # ETF 日线（东财，失败回退新浪）、外部数据�
 tabulate>=0.9      # pandas DataFrame.to_markdown（归因报告等）
 pyarrow>=15.0      # Parquet(zstd) 列式存储：scripts/csv_to_parquet.py 生成、data.py 双读（见 ADR-004）
 duckdb>=1.0        # 只读跨 Parquet 的 SQL 查询/全市场对账，零建库零常驻（见 ADR-004）
+polars>=1.40       # 全市场指标/形态向量化（lazy scan_parquet + over/rolling），扫描器 v2 候选主引擎；基准 scripts/bench_scan_engines.py 必用（见 ADR-005，待确认转正）
 
 # 可选（仅特定脚本用到，不需要可跳过）：
 # playwright     # scripts/download_etf_playwright.py（浏览器采集，需再 playwright install）

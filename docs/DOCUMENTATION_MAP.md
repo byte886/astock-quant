@@ -138,6 +138,7 @@
 | 回测 | `scripts/run_multifactor_backtest.py` | 多因子回测（`--factor value/growth/both --top 15 --start`） |
 | 回测 | `scripts/backtest_etf_rotation.py` | ETF 轮动回测 |
 | 研究验证 | `scripts/attribute_growth_drawdown.py` | T28 成长策略 -60% 回撤归因+改进变体回测（A估值/B质量/C择时/D估值+择时/E质量+择时），产物 results/growth_attribution/ |
+| 研究验证 | `scripts/bench_scan_engines.py` | 扫描引擎三方案基准（pandas/DuckDB/Polars，在自有日线 Parquet 上测 L1捞数/L2分组指标/L3形态时序/L4横截面，独立子进程测耗时内存并交叉校验），ADR-005 证据，结果落 results/engine_benchmark/ |
 | 模拟盘 | `scripts/run_paper_trading.py` | 价值策略模拟盘（建仓首跑 + 日常增量推进：T日盘后信号、T+1开盘成交、收盘盯市、月末新信号） |
 | 模拟盘 | `src/execution/paper_trading.py` | 模拟盘账户/撮合/成本引擎（佣金万2.5+卖出印花税千1+滑点千1） |
 | 测试 | `tests/test_paper_trading_daily.py` | 模拟盘日常逻辑自检（信号日不成交/T+1开盘成交/幂等/月末新信号四场景，标准库无依赖） |
