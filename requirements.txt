@@ -11,4 +11,3 @@ duckdb>=1.0        # 只读跨 Parquet 的 SQL 查询/全市场对账，零建�
 
 # 可选（仅特定脚本用到，不需要可跳过）：
 # playwright     # scripts/download_etf_playwright.py（浏览器采集，需再 playwright install）
-# mootdx / pytdx # 通达信备用/实时源探针 scripts/probe_tdx_minute.py；当前网络环境未跑通，暂不固化
