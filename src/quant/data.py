@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-数据加载层：中证800日线 + 财务数据（ROE/成长/分红）
+数据加载层：个股日线 + ETF 基准 + 财务数据（ROE/成长/分红）
 ==================================================
+存储双轨：原始 CSV 与同名 Parquet(zstd) 并存，默认 **Parquet 优先、CSV 回退**
+（生成脚本 scripts/csv_to_parquet.py，决策见 02_决策记录/ADR-004）；
+置模块常量 PREFER_PARQUET=False 可强制只读 CSV。两种格式列语义一致，
+下方的日期/数值清洗对 Parquet 是幂等的、对 CSV 是必需的。
 所有路径相对项目根目录；v0.1 股票池用当前中证800成分（幸存者偏差见策略文档§8），
 历史动态成分股就绪后在 load_constituents(date) 中按 date 切换。
 """
@@ -18,6 +22,25 @@ FUND_DIR = ROOT / "data/raw/fundamentals"
 CONS_DIR = ROOT / "data/raw/index_constituents"
 WORKSPACE = ROOT / "data/_workspace"
 
+# 读取开关：True=同名 .parquet 存在则优先读（由 scripts/csv_to_parquet.py 生成），
+# 缺失时自动回退 CSV；置 False 可整体退回只读 CSV。
+PREFER_PARQUET = True
+
+
+def _read_table(csv_path):
+    """读一张"每只一个文件"的表：优先同名 Parquet，缺失或关开关时回退 CSV。
+
+    传入 .csv 路径即可，Parquet 路径由其同名替换后缀得到；两种格式列语义一致。
+    文件都不存在时返回 None，由调用方决定返回 None 还是空 DataFrame。
+    """
+    csv_path = Path(csv_path)
+    pq_path = csv_path.with_suffix(".parquet")
+    if PREFER_PARQUET and pq_path.exists():
+        return pd.read_parquet(pq_path)
+    if csv_path.exists():
+        return pd.read_csv(csv_path)
+    return None
+
 
 def load_constituents():
     """返回当前中证800成分股列表（剔除科创板）。
@@ -31,22 +54,21 @@ def load_constituents():
         codes = sorted(set(st.get("completed", [])) | set(st.get("failed", {}).keys()))
         if codes:
             return codes
-    # 再退化：扫描日线目录
+    # 再退化：扫描日线目录（CSV 与 Parquet 同名，按 stem 去重）
     codes = []
     for mkt in ["sh", "sz"]:
         d = DAILY_DIR / mkt
         if d.exists():
-            codes += [p.stem for p in d.glob("*.csv")]
+            stems = {p.stem for p in d.glob("*.csv")} | {p.stem for p in d.glob("*.parquet")}
+            codes += sorted(stems)
     return sorted(c for c in codes if "688" not in c)
 
 
 def _read_daily(code):
     mkt = "sh" if code.startswith("sh.") else "sz"
     p = DAILY_DIR / mkt / f"{code}.csv"
-    if not p.exists():
-        return None
-    df = pd.read_csv(p)
-    if df.empty:
+    df = _read_table(p)
+    if df is None or df.empty:
         return None
     df["date"] = pd.to_datetime(df["date"])
     num_cols = ["open", "high", "low", "close", "preclose", "volume",
@@ -95,9 +117,9 @@ def load_price_panel(codes=None, field="close"):
 
 def load_profit(code):
     p = FUND_DIR / "profit" / f"{code}.csv"
-    if not p.exists():
+    df = _read_table(p)
+    if df is None:
         return pd.DataFrame()
-    df = pd.read_csv(p)
     df["pubDate"] = pd.to_datetime(df["pubDate"], errors="coerce")
     df["statDate"] = pd.to_datetime(df["statDate"], errors="coerce")
     df["roeAvg"] = pd.to_numeric(df["roeAvg"], errors="coerce")
@@ -106,9 +128,9 @@ def load_profit(code):
 
 def load_growth(code):
     p = FUND_DIR / "growth" / f"{code}.csv"
-    if not p.exists():
+    df = _read_table(p)
+    if df is None:
         return pd.DataFrame()
-    df = pd.read_csv(p)
     df["pubDate"] = pd.to_datetime(df["pubDate"], errors="coerce")
     df["statDate"] = pd.to_datetime(df["statDate"], errors="coerce")
     df["YOYNI"] = pd.to_numeric(df["YOYNI"], errors="coerce")
@@ -117,9 +139,9 @@ def load_growth(code):
 
 def load_dividend(code):
     p = FUND_DIR / "dividend" / f"{code}.csv"
-    if not p.exists():
+    df = _read_table(p)
+    if df is None:
         return pd.DataFrame()
-    df = pd.read_csv(p)
     df["dividOperateDate"] = pd.to_datetime(df["dividOperateDate"], errors="coerce")
     df["cash"] = pd.to_numeric(df["dividCashPsBeforeTax"], errors="coerce")
     return df
@@ -128,7 +150,9 @@ def load_dividend(code):
 def load_benchmark():
     """沪深300ETF 作为基准，返回日频 close Series。"""
     p = ROOT / "data/raw/etf/daily/sh/sh.510300.csv"
-    df = pd.read_csv(p)
+    df = _read_table(p)
+    if df is None:
+        raise FileNotFoundError(f"基准数据缺失：{p}（CSV 与 Parquet 均不存在）")
     df["date"] = pd.to_datetime(df["date"])
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
     return df.sort_values("date").set_index("date")["close"]

@@ -6,6 +6,9 @@ baostock==0.9.3
 matplotlib>=3.8
 akshare>=1.18.97   # ETF 日线（东财，失败回退新浪）、外部数据探针；盘后编排必用
 tabulate>=0.9      # pandas DataFrame.to_markdown（归因报告等）
+pyarrow>=15.0      # Parquet(zstd) 列式存储：scripts/csv_to_parquet.py 生成、data.py 双读（见 ADR-004）
+duckdb>=1.0        # 只读跨 Parquet 的 SQL 查询/全市场对账，零建库零常驻（见 ADR-004）
 
 # 可选（仅特定脚本用到，不需要可跳过）：
 # playwright     # scripts/download_etf_playwright.py（浏览器采集，需再 playwright install）
+# mootdx / pytdx # 通达信备用/实时源探针 scripts/probe_tdx_minute.py；当前网络环境未跑通，暂不固化
