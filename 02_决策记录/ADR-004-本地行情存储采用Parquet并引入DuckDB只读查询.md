@@ -55,7 +55,8 @@ IP 限流；akshare 分钟仅近几日、不能承担全量历史，Tushare 长�
    "不复权 + 复权因子"，届时需重落盘并另开 ADR。
 6. **引入 DuckDB 作为只读分析/对账工具**：直接对一批 Parquet 跑 SQL（自动列裁剪与谓词
    下推），零建库、零常驻服务；定位是全市场扫描取数与跨源对账的查询引擎，**不做主数据
-   存储、不引入常驻数据库**。
+   存储、不引入常驻数据库**。为什么选 DuckDB 而非 SQLite/Polars/ClickHouse 等，见下文
+   「查询引擎选型」（2026-09-22 补查，含来源与"自有数据复测"前置）。
 7. **CSV 退役是后续、可选项**：需满足"Parquet 双读稳定运行 + 每日增量直写 Parquet +
    跨源对账通过 + 用户确认"后才评估停写/删除；当前一律保留 CSV。
 8. 后续工单（本 ADR 不含实现）：`download_data.py` 每日增量同步直写 Parquet；3号池
@@ -73,6 +74,52 @@ IP 限流；akshare 分钟仅近几日、不能承担全量历史，Tushare 长�
   工程；DuckDB + Parquet 已能满足全市场扫描与对账。
 - **现在就改成"不复权 + 复权因子"**：需重下全量并冲击在跑的下载与既有回测，推迟到多源
   接入时统一做。
+
+## 查询引擎选型：为什么是 DuckDB（2026-09-22 补查）
+
+定 ADR 时只否掉了重型数据库，未与同量级的嵌入式引擎正面对比；2026-09-22 补做一轮横向
+调研。**外部基准随硬件/版本/负载变化，只作参考、不替代在本项目自有数据上的复测。**
+
+| 方案 | 形态 / 范式 | 对本项目的判断 |
+|---|---|---|
+| pandas（现状） | 行式 DataFrame、内存内 | 全市场需逐只 read 再 concat，瓶颈在文件数与 DataFrame 拼接（现拼日线面板 8.97s）；大聚合吃内存 |
+| SQLite | 嵌入式、**行存**、OLTP | 擅点查/增删改/事务，逐行执行；大范围扫描聚合比列存慢一到两个数量级，方向不符 |
+| Polars | 嵌入式、**列存**、Rust DataFrame（表达式 API、lazy/streaming） | 性能与 DuckDB 同档、也能直接扫 Parquet，是最强同量级对手；但范式是 Python DataFrame 转换而非 SQL。列为"未来重型特征工程/ETL 的并存候选"，当前因子计算仍用 pandas，暂不引入 |
+| **DuckDB** | 嵌入式、**列存**、SQL，就地查 Parquet | **选中**：一句 SQL + glob 跨上千文件扫描/join/对账，自动列裁剪+块裁剪+join 顺序优化；内存超限可 spill 落盘；零建库零常驻、文件即数据 |
+| ClickHouse / PostgreSQL / Spark / 数仓 | 独立服务器或集群 | 需 daemon/端口/运维/复制；个人单机、只读分析为主，属过度工程 |
+
+**选择理由（针对本项目负载＝跨 4889 个 Parquet 文件做全市场扫描、聚合、跨源对账、回测取数）**：
+
+1. **范式匹配**：核心动作是多文件 SQL 聚合/join/对账，DuckDB 的 glob 就地查询加查询优化器
+   直接替代 pandas 逐只读取拼接；公开的多文件分区裁剪测试中内存占用显著更低（1 亿行约
+   0.7GB，对比 pandas 8GB+ 易 OOM、Polars 1–2GB）。
+2. **嵌入式零运维**：与 SQLite 同为进程内库、无端口/无守护进程/无 client-server 往返，却
+   列存向量化；ClickBench 上 100GB 数据导入约 119s（无服务器架构反而最快）、43 条分析查询
+   中胜出 10 条，居嵌入式第一梯队。
+3. **内存安全**：数据量大于内存时可 spill 到磁盘，适合上亿行分钟线，不易 OOM。
+4. **不建库、文件即数据**：直接查 Parquet，不另存一份、无需同步，契合双轨与可重建原则。
+
+**诚实边界（不写成"DuckDB 绝对最快"）**：窗口函数与部分中小负载 Polars streaming 更快，
+单行点查 pandas/SQLite 更快，2TB 级超大 Parquet 上两者互有胜负；决定因素是**范式匹配与
+内存稳**，不是绝对速度。业界常见做法是 DuckDB（SQL/多文件聚合）与 Polars（Python 内转换/
+特征工程）同进程并存、共享 Arrow 内存。本项目当前只引入 DuckDB，Polars 留作后续瓶颈出现
+时的候选，不提前增加依赖。
+
+**落地前置（已挂台账 T29）**：扫描器读取层切换到 Parquet/DuckDB 前，必须在**本项目自有
+Parquet** 上做一次 DuckDB vs Polars vs pandas 的小基准再定稿，不直接采信外部榜单。
+
+参考来源（2026-09 检索）：
+
+- [DuckDB 官方 Why DuckDB（向量化 vs SQLite/PostgreSQL 逐行）](https://duckdb.org/why_duckdb)
+- [ClickHouse 官方 ClickBench：最快 OLAP 数据库 2026（含 DuckDB 嵌入式排名）](https://clickhouse.com/resources/engineering/fastest-olap-databases)
+- [DuckDB vs Polars in 2026（含 codecentric 2GB–2TB Parquet 基准引述）](https://www.danilchenko.dev/posts/duckdb-vs-polars/)
+- [DuckDB vs Polars：SQL 引擎还是 DataFrame 库](https://fastero.com/blog/duckdb-vs-polars-which-dataframe-engine)
+- [DuckDB Parquet 分区裁剪与内存对比](https://duckdblab.org/en/post/duckdb-parquet-partition-pruning/)
+- [SQLite 与 DuckDB 的部署/存储差异](https://spice.ai/learn/duckdb)
+- [pandas/Polars/DuckDB 分项基准（Parquet 读过滤、点查、join）](http://pythondatabench.com/de/article/duckdb-python-pandas-sql-analytik-2026)
+
+> 注：duckdblab.org 属 DuckDB 生态向站点，其"A 股本地回测快 10–20 倍"说法仅作佐证、非中立
+> 基准，故未作为选型关键依据。
 
 ## 已知局限（诚实清单）
 
