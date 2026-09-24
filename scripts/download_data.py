@@ -146,7 +146,7 @@ def get_stock_list():
         sh_list.append(rs_sh.get_row_data())
     df_sh = pd.DataFrame(sh_list, columns=rs_sh.fields)
 
-    sleep_interval()
+    sleep_interval("daily")
 
     # 获取深证股票
     rs_sz = bs.query_all_stock(day="2026-09-15")
@@ -158,8 +158,8 @@ def get_stock_list():
     df = pd.concat([df_sh, df_sz], ignore_index=True)
     # 只保留股票（code 以 sh.6 / sz.0 / sz.3 开头），排除指数和基金
     df = df[df["code"].str.match(r"^(sh\.6|sz\.0|sz\.3)")]
-    # 排除科创板（sh.688）——用户明确不需要
-    df = df[~df["code"].str.startswith("sh.688")]
+    # 排除科创板（sh.688）及其CDR存托凭证（sh.689，如九号公司689009）——用户明确不需要
+    df = df[~df["code"].str.startswith(("sh.688", "sh.689"))]
     # 去重（同一股票可能有多条状态记录）
     df = df.drop_duplicates(subset=["code"]).sort_values("code").reset_index(drop=True)
 
