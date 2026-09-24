@@ -361,11 +361,21 @@ class Monitor:
             self.states[key] = new_state
             return
 
+        # 命中条件说明（写进消息第一行，让用户一眼看到为什么报）
+        if l2:
+            reasons = [f"满足L2：涨幅>{CHG_L1}% 且 涨停≥{ZT_L2} 且 量比≥{LB_L2}"]
+        else:
+            reasons = []
+            if hit_l1_speed:
+                reasons.append(f"涨速≥{speed_thr}%")
+            if hit_l1_chg:
+                reasons.append(f"涨幅>{CHG_L1}% 且 涨停≥{ZT_L1}")
         # 持仓/候选联动（按板块名粗匹配；v1 简化，后续接成分精配）
         tag = []
         if self.holdings:
             tag.append(f"持仓{len(self.holdings)}")
-        msg = (f"涨幅 {chg:+.2f}% ｜ 涨停 {zt_n} 家"
+        msg = (f"触发：{' ＋ '.join(reasons)}\n"
+               f"涨幅 {chg:+.2f}% ｜ 涨停 {zt_n} 家"
                + (f" ｜ 涨速 {speed:+.2f}%" if speed is not None else "")
                + (f" ｜ 量比 {lb:.2f}" if lb is not None else "")
                + (f" ｜ 全市场涨停 {n_zt}" if n_zt else "")
