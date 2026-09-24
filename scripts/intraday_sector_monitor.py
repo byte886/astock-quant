@@ -57,6 +57,9 @@ ZT_L2       = int(_f("MON_ZT_L2", 5))    # L2 涨停家数
 LB_L2       = _f("MON_LB_L2", 1.5)       # L2 量比
 UP_RATIO    = _f("MON_UP_RATIO", 0.6)    # L2 上涨家数占比
 CONCENTRATION = _f("MON_CONC", 0.15)     # 强信号：板块涨停占全市场比
+# 本次运行生效的阈值快照（写进每条预警，便于日后按"当时标准"追溯）
+THRESHOLD_SNAP = (f"chg>{CHG_L1}%|ztL1>={ZT_L1}|ztL2>={ZT_L2}|"
+                  f"lb>={LB_L2}|speed>{SPEED_L1}/尾盘{SPEED_LATE}")
 POLL_NORMAL = int(_f("MON_POLL_NORMAL", 60))   # 常规轮询秒
 POLL_LATE   = int(_f("MON_POLL_LATE", 30))     # 尾盘轮询秒
 POLL_CLOSED = int(_f("MON_POLL_CLOSED", 300))  # 判休市后拉长
@@ -254,7 +257,8 @@ def append_alert(row):
     p = ALERT_DIR / f"{datetime.now():%Y-%m-%d}.csv"
     exists = p.exists()
     cols = ["时间", "级别", "板块类型", "板块代码", "板块名", "涨幅%", "涨停数",
-            "涨速%", "量比", "上涨占比", "主力净流入(元)", "命中持仓", "命中候选", "消息"]
+            "涨速%", "量比", "上涨占比", "主力净流入(元)", "命中持仓", "命中候选",
+            "阈值快照", "消息"]
     with open(p, "a", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         if not exists:
@@ -391,7 +395,7 @@ class Monitor:
             "量比": round(lb, 2) if lb is not None else "",
             "上涨占比": "", "主力净流入(元)": "",
             "命中持仓": ",".join(self.holdings.values()) if level else "",
-            "命中候选": "", "消息": msg,
+            "命中候选": "", "阈值快照": THRESHOLD_SNAP, "消息": msg,
         })
         self.states[key] = new_state
         log(f"[{level}] {name} {msg}")
