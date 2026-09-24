@@ -62,7 +62,7 @@ THRESHOLD_SNAP = (f"chg>{CHG_L1}%|ztL1>={ZT_L1}|ztL2>={ZT_L2}|"
                   f"lb>={LB_L2}|speed>{SPEED_L1}/尾盘{SPEED_LATE}")
 POLL_NORMAL = int(_f("MON_POLL_NORMAL", 60))   # 常规轮询秒
 POLL_LATE   = int(_f("MON_POLL_LATE", 30))     # 尾盘轮询秒
-POLL_CLOSED = int(_f("MON_POLL_CLOSED", 300))  # 判休市后拉长
+POLL_CLOSED = int(_f("MON_POLL_CLOSED", 60))    # 判休市后醒来周期（s）：每分钟醒一次判断是否开盘，开盘后≤1分钟上岗
 
 EM_HEADERS = ["-H", "Referer: https://quote.eastmoney.com/",
               "-H", "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"]
