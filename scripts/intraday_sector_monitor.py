@@ -34,6 +34,13 @@
   HOLDINGS_CSV        持仓表路径（默认 config/holdings.csv）
 """
 import os, sys, csv, json, time, subprocess, fcntl, traceback
+
+# 国内行情必须直连，禁止任何代理（豆包沙箱会注入 DOUBAO_OFFICE_*_FORWARD_PROXY，
+# launchd 进程继承后访问东财/同花顺会被代理劫持报 ProxyError；import akshare 前清干净）
+for _k in list(os.environ):
+    if "proxy" in _k.lower():
+        os.environ.pop(_k, None)
+
 from pathlib import Path
 from datetime import datetime, time as dtime
 
