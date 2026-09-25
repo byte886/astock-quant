@@ -274,10 +274,36 @@ def append_alert(row):
 
 
 # ---------------- 交易时段 ----------------
+TRADE_CAL = WORKSPACE / "trade_cal.json"
+
+def load_trade_dates():
+    """加载 A 股交易日历（新浪接口，本地缓存7天）。
+    返回 set['YYYY-MM-DD']；拉取失败返回 None（降级为只按周末判断）。"""
+    if TRADE_CAL.exists():
+        try:
+            age = time.time() - TRADE_CAL.stat().st_mtime
+            if age < 7 * 86400:
+                return set(json.load(open(TRADE_CAL)))
+        except Exception:
+            pass
+    try:
+        import akshare as ak
+        cal = ak.tool_trade_date_hist_sina()
+        dates = sorted(set(cal["trade_date"].astype(str).tolist()))
+        json.dump(dates, open(TRADE_CAL, "w"))
+        return set(dates)
+    except Exception as e:
+        print(f"[{datetime.now():%F %T}] 交易日历拉取失败，降级仅按周末判断: {e}", file=sys.stderr)
+        return None
+
+
 def is_trading_time(now=None):
     now = now or datetime.now()
     if now.weekday() >= 5:
         return False
+    cal = load_trade_dates()
+    if cal is not None and now.strftime("%Y-%m-%d") not in cal:
+        return False  # 法定节假日（中秋/国庆等），不开市不扫描
     t = now.time()
     return (dtime(9, 30) <= t <= dtime(11, 30)) or (dtime(13, 0) <= t <= dtime(15, 0))
 
