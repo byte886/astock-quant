@@ -5,6 +5,10 @@
 
 > **2026-09-26 20:15 更新**：download-monitor 已 bootout 移除。原因：全量个股(4602)+指数(286)=4888 已全齐，但该巡检按"有效csv"口径漏判1只、误认未完成，每15分钟反复 kickstart download-data 空转。plist 文件保留在 ~/Library/LaunchAgents，将来需要可重新 bootstrap。
 
+> **2026-09-26 21:00 更新（T13 收尾 + T35）**：**统一每日增量更新机制上线**。新增常驻 `com.astock-quant.incremental-worker`（`scripts/incremental_update.py --daemon`，单例+KeepAlive自愈，豆包关了也跑）。盘后15:05起按优先级：①核心池（个股中证800、ETF `config/core_etfs.csv` 30只）日线+5分钟；②全市场日线分批游标补当天；③全市场5分钟滚动追赶（仅交易日非盘中）。**增量当次同写 CSV+Parquet（T35，消除双轨时间差）**。已小样本实测：ETF日线(akshare)、个股日线(baostock) 各1只，CSV/Parquet 行数、末日、列完全一致。`daily_after_close.sh` 精简为只跑模拟盘；已 bootout download-data、fundamentals（全量使命完成，防 baostock 并发，plist保留）。决策见 **ADR-006**。
+>
+> **待 9-28 周一盘后首次真实验证**：核心四类真更新、全市场日线游标推进、CSV/Parquet 同日一致、滚动游标落盘。
+
 ## ✅ 里程碑：核心行情数据全齐（2026-09-26 晚核对）
 
 - 个股 **4602 只**（沪深主板+创业板，已按要求剔除科创板688/北交所）：日线、5分钟线逐只核对 **0 缺失**。
