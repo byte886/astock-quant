@@ -427,6 +427,7 @@ class Monitor:
                f"涨幅 {chg:+.2f}% ｜ 涨停 {zt_n} 家"
                + (f" ｜ 涨速 {speed:+.2f}%" if speed is not None else "")
                + (f" ｜ 量比 {lb:.2f}" if lb is not None else "")
+               + (f" ｜ 上涨占比 {up_ratio*100:.0f}%" if up_ratio is not None else "")
                + (f" ｜ 全市场涨停 {n_zt}" if n_zt else "")
                + (f" ｜ {'/'.join(tag)}" if tag else "")
                + conc_line)
@@ -439,7 +440,7 @@ class Monitor:
             "涨幅%": round(chg, 2), "涨停数": zt_n,
             "涨速%": round(speed, 2) if speed is not None else "",
             "量比": round(lb, 2) if lb is not None else "",
-            "上涨占比": "", "主力净流入(元)": "",
+            "上涨占比": round(up_ratio*100) if up_ratio is not None else "", "主力净流入(元)": "",
             "命中持仓": ",".join(self.holdings.values()) if level else "",
             "命中候选": "", "阈值快照": THRESHOLD_SNAP, "消息": msg,
         })
