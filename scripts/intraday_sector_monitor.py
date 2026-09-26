@@ -411,12 +411,21 @@ class Monitor:
         tag = []
         if self.holdings:
             tag.append(f"持仓{len(self.holdings)}")
+        # 主线标签：该板块涨停占全市场比例，辅助判断"主线中的主线"
+        conc_line = ""
+        if n_zt and zt_n:
+            _r = zt_n / n_zt
+            if _r >= CONCENTRATION:
+                conc_line = f"\n⭐ 当前市场主线（占今日涨停 {_r*100:.0f}%，≥{CONCENTRATION*100:.0f}%）"
+            else:
+                conc_line = f"\n占今日涨停 {_r*100:.0f}%（主线阈值≥{CONCENTRATION*100:.0f}%，暂非主线）"
         msg = (f"触发：{' ＋ '.join(reasons)}\n"
                f"涨幅 {chg:+.2f}% ｜ 涨停 {zt_n} 家"
                + (f" ｜ 涨速 {speed:+.2f}%" if speed is not None else "")
                + (f" ｜ 量比 {lb:.2f}" if lb is not None else "")
                + (f" ｜ 全市场涨停 {n_zt}" if n_zt else "")
-               + (f" ｜ {'/'.join(tag)}" if tag else ""))
+               + (f" ｜ {'/'.join(tag)}" if tag else "")
+               + conc_line)
 
         title = f"{'🔴 L2 主线' if level=='L2' else '🟠 L1 异动'}｜{name}"
         push(title, msg)
