@@ -318,6 +318,7 @@ class Monitor:
         self.holdings = load_csv_codes(os.environ.get(
             "HOLDINGS_CSV", str(ROOT / "config" / "holdings.csv")))
         self.pool = load_csv_codes(str(ROOT / "config" / "pool3_constituents.csv"))
+        self.hint_shown = False   # 当天是否已提示过"未配置持仓"
 
     def scan_once(self):
         now = datetime.now()
@@ -417,6 +418,11 @@ class Monitor:
         tag = []
         if self.holdings:
             tag.append(f"持仓{len(self.holdings)}")
+        hint_line = ""
+        if not self.holdings and not self.hint_shown:
+            self.hint_shown = True
+            hint_line = ("\n💡 未配置持仓：想让板块爆发时提醒你手里的票？"
+                         "可在 config/holdings.csv 填入持仓代码即可开启")
         # 主线标签：该板块涨停占全市场比例，辅助判断"主线中的主线"
         conc_line = ""
         if n_zt and zt_n:
@@ -432,7 +438,8 @@ class Monitor:
                + (f" ｜ 上涨占比 {up_ratio*100:.0f}%" if up_ratio is not None else "")
                + (f" ｜ 全市场涨停 {n_zt}" if n_zt else "")
                + (f" ｜ {'/'.join(tag)}" if tag else "")
-               + conc_line)
+               + conc_line
+               + hint_line)
 
         title = f"{'🔴 L2 主线' if level=='L2' else '🟠 L1 异动'}｜{name}"
         push(title, msg)
