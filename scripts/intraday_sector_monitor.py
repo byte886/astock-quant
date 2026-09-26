@@ -223,12 +223,14 @@ def load_csv_codes(path):
         return codes
     try:
         with open(p, encoding="utf-8") as f:
-            for row in csv.DictReader(f):
+            lines = [ln.strip() for ln in f if ln.strip() and not ln.strip().startswith("#")]
+        if lines:
+            for row in csv.DictReader(lines):
                 code = normalize_code(row.get("code") or row.get("代码") or "")
                 if code:
                     codes[code] = row.get("name") or row.get("名称") or ""
     except Exception as e:
-        log(f"[load_csv {path.name}] {e}")
+        log(f"[load_csv {p.name}] {e}")
     return codes
 
 
