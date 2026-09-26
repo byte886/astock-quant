@@ -49,3 +49,8 @@
 - 待办：行情下载（com.astock-quant.download-data）收尾后，连一次 baostock，取 hs300+zz500 当前成分去重作为目标清单，与三类已下载文件逐只比对。
 - 输出：确定缺哪几只、缺的原因（疑似未分红公司无 dividend 记录 / 财务字段缺失），区分"数据源无记录"与"真下载失败需补"。
 - 注意：避免与下载服务并发 baostock 登录（同账号多进程会挂起）。
+
+## 待治理：行情数据 csv 与 parquet 并存、有冗余（2026-09-26 登记）
+- daily：csv 4889 + parquet 2117；minute：csv 4888 + parquet 1789。约 2117/1789 只票同时存在两份文件，占额外空间。
+- 背景：parquet 是读取优化格式（DuckDB/Parquet 方案，ADR-004），csv 是原始下载格式；转了一部分但未删 csv、也未全转。
+- 待办：确定统一格式口径；若以 parquet 为准，逐只校验 parquet 与 csv 内容一致后再删冗余 csv（反之亦然）。删除前必须校验，不擅删。
