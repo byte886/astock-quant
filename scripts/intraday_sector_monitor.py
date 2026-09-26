@@ -110,7 +110,7 @@ def normalize_code(c):
 def em_boards(kind="concept"):
     """返回 [{code:BKxx,name,chg,amount,lb,speed}]。失败返回 None。"""
     fs = "m:90+t:3" if kind == "concept" else "m:90+t:2"
-    fields = "f2,f3,f6,f10,f12,f14,f22"
+    fields = "f2,f3,f6,f10,f12,f14,f22,f104,f105"
     url = (f"https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1000&po=1&np=1"
            f"&fltt=2&invt=2&fs={fs}&fields={fields}")
     try:
@@ -123,6 +123,7 @@ def em_boards(kind="concept"):
                 "code": r.get("f12"), "name": r.get("f14"),
                 "chg": num(r.get("f3")), "amount": num(r.get("f6")),
                 "lb": num(r.get("f10")), "speed": num(r.get("f22")),
+                "up": num(r.get("f104")), "down": num(r.get("f105")),
             })
         return rows
     except Exception as e:
@@ -367,13 +368,16 @@ class Monitor:
             zt_n = zt_by_industry.get(name, 0) or zt_by_concept.get(name, 0)
         speed = b.get("speed")
         lb = b.get("lb")
+        up = b.get("up"); down = b.get("down")
+        up_ratio = (up/(up+down)) if (up and down is not None and (up+down)>0) else None
 
         # 触发判断
         speed_thr = SPEED_LATE if late else SPEED_L1
         hit_l1_speed = (speed is not None and speed >= speed_thr)
         hit_l1_chg = (chg > CHG_L1 and zt_n >= ZT_L1)
         l1 = hit_l1_speed or hit_l1_chg
-        l2 = (chg > CHG_L1 and zt_n >= ZT_L2 and (lb is None or lb >= LB_L2))
+        l2 = (chg > CHG_L1 and zt_n >= ZT_L2 and (lb is None or lb >= LB_L2)
+              and (up_ratio is None or up_ratio >= UP_RATIO))
 
         key = b["code"] or name
         prev = self.states.get(key, "NONE")
@@ -400,7 +404,7 @@ class Monitor:
 
         # 命中条件说明（写进消息第一行，让用户一眼看到为什么报）
         if l2:
-            reasons = [f"满足L2：涨幅>{CHG_L1}% 且 涨停≥{ZT_L2} 且 量比≥{LB_L2}"]
+            reasons = [f"满足L2：涨幅>{CHG_L1}% 且 涨停≥{ZT_L2} 且 量比≥{LB_L2} 且 上涨占比>{UP_RATIO*100:.0f}%"]
         else:
             reasons = []
             if hit_l1_speed:
