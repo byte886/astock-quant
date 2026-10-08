@@ -85,6 +85,8 @@
 | ETF轮动策略 | `docs/strategies/ETF轮动策略_v0.1.md` | MVP策略设计稿（候选池/调仓/选股/风控） |
 | 多因子选股策略 | `docs/strategies/多因子选股策略_v0.1.md` | 价值(股息率)/成长(YOYNI+ROE)因子、月度调仓、回测口径（G2：价值 Conditional Go、成长 Hold） |
 | 舆情因子与模拟盘 | `docs/strategies/舆情因子与模拟盘设计_v0.1.md` | 股吧情绪反向指标+历史数据验证方案+模拟盘设计（单维度已验证不稳健，C2 挂起） |
+| 盘中板块异动监测方案 | `docs/盘中板块异动监测方案_AB双轨_v1.0.md` | 盘中全板块异动监测的 A/B 双轨方案对比（东财 push2 / 腾讯 spot / 新浪兜底），2026-09-24 定稿 |
+| 盘中板块异动监测上线说明 | `docs/板块异动监测_上线说明.md` | 盘中监控落地：代码怎么跑、踩过的坑、数据源实测、部署/推送凭证、历史预警查询 |
 | 3号池扫描报告 | `01_结论与产出/3号池扫描/3号池扫描报告_2026-09-18.md` | 外脑抓手 pool3_scan 的人读评级报告（定稿归档；明细 CSV 在本地 results/） |
 
 ### 一、项目治理（六槽位）
@@ -152,6 +154,8 @@
 | 舆情(C2挂起) | `scripts/fetch_guba_sentiment.py` / `analyze_guba_sentiment.py` / `verify_sentiment_contrarian.py` | 股吧发帖采集/情绪指数/反向指标验证（单维度已证不稳健） |
 | 项目维护 | `scripts/doc_health_check.py` | 文档健康度体检（断链/空目录/登记覆盖/数据误入git），提交前跑 |
 | 自动化 | `scripts/auto_run_when_ready.py` | 数据就绪后自动触发回测/扫描 |
+| 盘中监控 | `scripts/intraday_sector_monitor.py` | 盘中板块异动监测（launchd 常驻，`--once` 试跑/`--build-map` 建映射）：东财 push2(curl)→腾讯spot→东财涨停池→新浪兜底四路，L1/L2 触发企微推送；**已接 A 股交易日历，周末+法定节假日自动休眠**；留痕 `data/intraday_alerts/`；日志 `data/_workspace/intraday_monitor.log`；方案与坑见 `docs/板块异动监测_上线说明.md` |
+| 盘中监控 | `scripts/query_alerts.py` | 盘中异动预警留痕查询（`--date/--level/--board`） |
 
 ---
 
@@ -161,6 +165,6 @@
 |---|---|---|
 | 高顿 CPA 知识库 | `~/Doubao/chats/2026-08-26/new-chat/gaodun-course-knowledge-base/` | 方法论参考 |
 | 会计仓（高配参考） | `~/Desktop/accounting-kb/` | 项目管理高配实例（命名规范落地版 §9、自动检查脚本），本仓 §五 蓝本之一 |
-| 内容流水线 | `~/Desktop/multiplatform-content-pipeline/` | 内容采集+知识提取参考（含 domains/stock/） |
+| 内容流水线 | `~/Desktop/content-pipeline/` | 内容采集+知识提取参考（含 domains/stock/） |
 | 项目管理技能 | `~/Doubao/skills/project-manager/` | 本项目结构和模板来源 |
 | Baostock | http://baostock.com | A股免费数据源 |
