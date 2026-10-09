@@ -66,3 +66,6 @@ logs/
 .pytest_cache/
 .mypy_cache/
 .venv/
+
+# 个人/操盘手真实持仓，勿进公开仓库
+config/holdings.csv
