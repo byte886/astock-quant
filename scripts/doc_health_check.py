@@ -31,7 +31,7 @@ CORE_FILES = [
 # MAP 逐篇登记可豁免的目录（原始素材 / 逐篇 ADR / 逐份定稿报告，目录级登记即可）
 MAP_EXEMPT_PREFIX = ("09_调研底稿与素材/", "02_决策记录/", "01_结论与产出/")
 SKIP_WALK = {".git", ".venv", "venv", "node_modules", "data", "results",
-             "__pycache__", ".pytest_cache"}
+             "__pycache__", ".pytest_cache", "target", "htmlcov"}
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)#]+)(?:#[^)]*)?\)")
 BACKTICK_MD_RE = re.compile(r"`([^`\n]+?\.md)`")
 PLACEHOLDER_RE = re.compile(r"(待创建|待补充|TODO|FIXME)")
