@@ -1,0 +1,38 @@
+# 盘中监控包（src/monitor）的确定性质量门配置 —— clean-code-gauntlet
+# 仅把监控包测试纳入本门；既有 tests/test_paper_trading_daily.py 仍按其文件头直接 python 运行。
+
+[tool.pytest.ini_options]
+testpaths = ["tests/monitor"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["src/monitor"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_empty = true
+
+[tool.importlinter]
+# grimp 只接受无点号的顶层包作为 root：src 为顶层包（含 __init__.py），
+# layers 契约用 src.monitor.* 全限定名约束监控包内部分层。
+root_packages = ["src"]
+include_external_packages = false
+
+[[tool.importlinter.contracts]]
+name = "Monitor layered architecture (cli -> monitor -> reconcile/notifier/persistence -> statemachine/aggregator/datasources -> codes -> config)"
+type = "layers"
+layers = [
+  "src.monitor.cli",
+  "src.monitor.monitor",
+  "src.monitor.reconcile",
+  "src.monitor.notifier",
+  "src.monitor.persistence",
+  "src.monitor.statemachine",
+  "src.monitor.aggregator",
+  "src.monitor.datasources",
+  "src.monitor.codes",
+  "src.monitor.config",
+]

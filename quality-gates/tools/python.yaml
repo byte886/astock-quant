@@ -1,0 +1,25 @@
+# 工具映射表 — Python（astock-quant）
+# 本项目当前纳入 clean-code-gauntlet 六道门的范围为盘中监控包 src/monitor；
+# 量子系统 src/quant 暂不在本契约范围内（后续单独接入）。
+# 一键验收：bash <GAUNTLET_DIR>/tooling/bin/quality-check.sh --stage merge --with-dry --equiv-ok
+# 需先激活虚拟环境：PATH="$PWD/.venv/bin:$PATH"
+
+language: python
+
+crap_tool: crapper
+crap_cmd: <GAUNTLET_DIR>/tooling/vendor/crapper/crapper --root . -s src/monitor --threshold 29
+
+mutation_tool: mutator
+mutation_cmd: <GAUNTLET_DIR>/tooling/vendor/mutator/mutator --root . -s src/monitor
+
+coverage_tool: coverage.py
+coverage_cmd: coverage run -m pytest tests/monitor && coverage report --fail-under=80
+
+architecture_tool: import-linter
+architecture_config: pyproject.toml
+architecture_cmd: lint-imports
+
+dry_tool: dryer
+dry_cmd: <GAUNTLET_DIR>/tooling/vendor/dryer/dryer --edn src/monitor
+
+note: "分层契约见 pyproject.toml [tool.importlinter]；等价变异体见 EQUIVALENT-MUTANTS.md（--equiv-ok 豁免）"

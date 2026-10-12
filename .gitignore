@@ -67,5 +67,11 @@ logs/
 .mypy_cache/
 .venv/
 
+# clean-code-gauntlet 质量工具产物（本地生成，勿入库）
+.metrics/
+.coverage
+target/coverage/
+target/mutation-workers/
+
 # 个人/操盘手真实持仓，勿进公开仓库
 config/holdings.csv
