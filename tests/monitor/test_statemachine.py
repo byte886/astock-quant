@@ -250,14 +250,37 @@ def test_build_alert_message_levels():
     st.update({"last_fire_zt": 3, "last_fire_chg": 2.6, "last_fire_lb": 1.5,
                "trough_at_relaunch": None})
     title, msg = sm.build_alert_message(sig, 40, 0.2, "L2", "首次启动", 1, None,
-                                        st, NOW, ["持仓3"], "\nHINT")
+                                        st, NOW, ["持仓3"], "\nHINT", "eastmoney")
     assert title.startswith("🔴") and "首次启动" in title
     assert "满足L2" in msg and "变化：" in msg and "持仓3" in msg and "HINT" in msg
+    assert "兜底" not in msg  # 主源 eastmoney 不带口径标注
     sig_l1 = sm.classify_signal(board(chg=1.0, zt=0, speed=SPEED_L1, lb=None,
                                       up=None, down=None), {}, {}, False)
     title1, msg1 = sm.build_alert_message(sig_l1, 40, None, "L1", "首次启动", 1,
-                                          None, sm.empty_board_state(), NOW, [], "")
+                                          None, sm.empty_board_state(), NOW, [],
+                                          "", "eastmoney")
     assert title1.startswith("🟠") and f"涨速≥{SPEED_L1}%" in msg1
+
+
+def test_source_caveat_by_source():
+    assert sm.source_caveat("eastmoney") == ""
+    cav_tx = sm.source_caveat("tencent_agg")
+    assert "腾讯" in cav_tx and "等权" in cav_tx
+    cav_sina = sm.source_caveat("sina")
+    assert "新浪" in cav_sina and "缺涨停" in cav_sina
+
+
+def test_build_alert_message_fallback_caveat():
+    sig = sm.classify_signal(board(chg=3.0, zt=5, lb=2.0, up=80, down=10),
+                             {}, {}, False)
+    _, msg_tx = sm.build_alert_message(sig, 40, None, "L2", "首次启动", 1, None,
+                                       sm.empty_board_state(), NOW, [], "",
+                                       "tencent_agg")
+    assert "腾讯个股聚合兜底" in msg_tx
+    _, msg_sina = sm.build_alert_message(sig, 40, None, "L2", "首次启动", 1,
+                                         None, sm.empty_board_state(), NOW, [],
+                                         "", "sina")
+    assert "新浪板块兜底" in msg_sina
 
 
 # ---------------- 变异测试边界加固（杀死 SURVIVED 位点） ----------------

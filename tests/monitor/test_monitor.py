@@ -106,6 +106,7 @@ def test_scan_once_emits_and_persists(mon, monkeypatch, no_push):
     source = mon.scan_once()
     assert source == "eastmoney"
     assert len(no_push) == 1  # 仅 A 达 L2 推送，C 不推
+    assert "兜底" not in no_push[0][1]  # 主源 eastmoney 不带兜底口径标注
     assert mon.states["BK1"]["fire_count"] == 1
 
 
@@ -120,6 +121,21 @@ def test_scan_once_all_sources_empty(mon, monkeypatch, no_push):
     assert no_push == []
 
 
+def test_scan_once_tencent_fallback_message_caveat(mon, monkeypatch, no_push):
+    # 东财不可用、腾讯聚合兜底且板块达 L2：source=tencent_agg，推送须带口径标注
+    monkeypatch.setattr(M, "em_boards", lambda kind: None)
+    monkeypatch.setattr(M, "build_sector_map", lambda d: {})
+    monkeypatch.setattr(M, "tx_spot", lambda: pd.DataFrame())
+    monkeypatch.setattr(M, "tx_board_agg",
+                        lambda smap, df: [bk("TX", "BK9", 3.0, 5, 2.0,
+                                             up=80, down=10)])
+    monkeypatch.setattr(M, "sina_boards", lambda ind: [])
+    monkeypatch.setattr(M, "zt_pool", lambda d: [])
+    assert mon.scan_once() == "tencent_agg"
+    assert len(no_push) == 1
+    assert "腾讯个股聚合兜底" in no_push[0][1]
+
+
 # ---------------- 单板块完整状态流（行为守恒核心） ----------------
 def test_board_wave_lifecycle(mon, no_push):
     t0 = datetime(2026, 10, 12, 10, 0)
@@ -128,7 +144,7 @@ def test_board_wave_lifecycle(mon, no_push):
         # 用独立板块 BKW，避免与其它用例落盘的当日状态串扰
         mon._eval_board(bk(name="W", code="BKW", chg=chg, zt=zt, lb=lb,
                            speed=speed, up=up, down=down),
-                        {}, {}, 10, False, now)
+                        {}, {}, 10, False, now, "eastmoney")
 
     ev(2.6, 3, t0)                                   # R1 首次 L1
     ev(2.7, 3, t0 + timedelta(minutes=2), lb=1.6)    # R2 同波无台阶 -> 静默

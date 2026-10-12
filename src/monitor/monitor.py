@@ -130,14 +130,16 @@ class Monitor:
         save_snapshot(now, boards, source)
 
         for b in boards:
-            self._eval_board(b, zt_by_industry, zt_by_concept, n_zt, late, now)
+            self._eval_board(b, zt_by_industry, zt_by_concept, n_zt, late, now,
+                             source)
 
         self._maybe_reconcile(now, source, boards, sector_map)
         save_board_states(self.states)
         return source
 
     # ---------- 单板块评估（编排状态机纯函数） ----------
-    def _eval_board(self, b, zt_by_industry, zt_by_concept, n_zt, late, now):
+    def _eval_board(self, b, zt_by_industry, zt_by_concept, n_zt, late, now,
+                    source):
         """对单个板块做一轮评估：分级 → 宽限/波次 → 决定推送则交 _emit_alert。"""
         sig = sm.classify_signal(b, zt_by_industry, zt_by_concept, late)
         if sig is None:
@@ -170,10 +172,10 @@ class Monitor:
             level, stage_tag = decision
 
         self._emit_alert(key, sig, n_zt, conc_ratio, level, stage_tag,
-                         relaunch_gap, st, snap, now)
+                         relaunch_gap, st, snap, now, source)
 
     def _emit_alert(self, key, sig, n_zt, conc_ratio, level, stage_tag,
-                    relaunch_gap, st, snap, now):
+                    relaunch_gap, st, snap, now, source):
         """本轮确定推送：计数 → 组装消息 → 推送/落台账 → 回写状态（副作用集中处）。"""
         st["fire_count"] = int(st.get("fire_count", 0)) + 1
         fire_no = st["fire_count"]
@@ -186,7 +188,7 @@ class Monitor:
         hold_tags, hint_line = self._hold_hint()
         title, msg = sm.build_alert_message(
             sig, n_zt, conc_ratio, level, stage_tag, fire_no,
-            relaunch_gap, st, now, hold_tags, hint_line)
+            relaunch_gap, st, now, hold_tags, hint_line, source)
         push(title, msg)
         append_alert({
             "时间": datetime.now().strftime("%H:%M:%S"), "级别": level,

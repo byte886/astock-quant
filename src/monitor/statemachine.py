@@ -231,8 +231,24 @@ def metrics_line(sig, n_zt, hold_tags):
     return line
 
 
+def source_caveat(source):
+    """非主源兜底时给一行口径提示；主源 eastmoney 返回空串。
+
+    东财加权与腾讯等权在临界阈值附近可能结论不同，新浪兜底还缺涨停/量比维度；
+    换源算出的结论必须在消息里"吱一声"，避免被当成与平时同口径的信号。
+    """
+    if source == "tencent_agg":
+        return ("\n⚠️ 东财暂不可用，本结论由腾讯个股聚合兜底算出（等权口径），"
+                "与东财加权口径在临界值附近可能有出入，请多留意")
+    if source == "sina":
+        return ("\n⚠️ 东财、腾讯均不可用，本结论由新浪板块兜底算出"
+                "（缺涨停/量比维度），信号可能不完整，请多留意")
+    return ""
+
+
 def build_alert_message(sig, n_zt, conc_ratio, level, stage_tag,
-                        fire_no, relaunch_gap, st, now, hold_tags, hint_line):
+                        fire_no, relaunch_gap, st, now, hold_tags, hint_line,
+                        source):
     """组装推送标题与正文（纯函数；持仓标签与未配置提示由 monitor 传入）。"""
     delta_line = format_deltas(st, sig)
     reasons = format_reasons(sig)
@@ -244,6 +260,7 @@ def build_alert_message(sig, n_zt, conc_ratio, level, stage_tag,
            + (delta_line + "\n" if delta_line else "")
            + f"触发：{' ＋ '.join(reasons)}\n"
            + metrics_line(sig, n_zt, hold_tags)
+           + source_caveat(source)
            + conc_line + hint_line)
     title = f"{'🔴' if level == 'L2' else '🟠'} {sig['name']} · {stage_tag}"
     return title, msg
