@@ -48,7 +48,8 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = ROOT / "data" / "_workspace"
 ALERT_DIR = ROOT / "data" / "intraday_alerts"
 SNAP_DIR = WORKSPACE / "snapshots"   # 每轮全板块快照，供事后逐分钟复盘
-for _d in (WORKSPACE, ALERT_DIR, SNAP_DIR):
+DIFF_DIR = WORKSPACE / "source_diff"  # 东财 vs 腾讯 两源口径偏差对账样本
+for _d in (WORKSPACE, ALERT_DIR, SNAP_DIR, DIFF_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 LOG = WORKSPACE / "intraday_monitor.log"
 
@@ -73,6 +74,7 @@ POLL_NORMAL = int(_f("MON_POLL_NORMAL", 60))   # 常规轮询秒
 POLL_LATE   = int(_f("MON_POLL_LATE", 30))     # 尾盘轮询秒
 POLL_CLOSED = int(_f("MON_POLL_CLOSED", 60))    # 判休市后醒来周期（s）：每分钟醒一次判断是否开盘，开盘后≤1分钟上岗
 HB_STALL_SEC = int(_f("MON_HB_STALL_SEC", 1800))  # 盘中心跳看门狗：交易时段连续无成功扫描超过该秒数即告警（默认30分钟，冷却同阈值）
+RECONCILE_INTERVAL_SEC = int(_f("MON_RECONCILE_INTERVAL_SEC", 1800))  # 东财可用时双源对账采样间隔（默认30分钟；东财被限自然不采、零开销）
 
 EM_HEADERS = ["-H", "Referer: https://quote.eastmoney.com/",
               "-H", "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"]
@@ -428,6 +430,61 @@ def save_snapshot(now, boards, source):
         log(f"[snapshot] 快照写入失败（不影响监测）：{type(e).__name__}: {e}")
 
 
+# ---------------- 双源口径对账（仅东财可用时低频采样，不参与触发） ----------------
+DIFF_HEADER = ["时间", "板块名", "东财涨幅%", "腾讯涨幅%", "涨幅差(东-腾)",
+               "东财涨停", "腾讯涨停", "东财上涨", "腾讯上涨", "东财下跌", "腾讯下跌"]
+
+def reconcile_sources(now, em_boards_data, smap):
+    """东财板块可用时，额外拉一次腾讯个股聚合，按板块名对齐两源指标并落盘，
+    累积"官方加权 vs 成分等权"偏差样本，供 scripts/reconcile_source_diff.py 盘后量化。
+    纯观测：任何异常只记日志，绝不影响信号主流程。"""
+    try:
+        tx_list = tx_board_agg(smap, tx_spot())
+        if not tx_list:
+            log("[reconcile] 腾讯聚合为空，跳过本轮双源对账")
+            return
+        tx_map = {b["name"]: b for b in tx_list}
+        ts = now.strftime("%Y-%m-%d %H:%M:%S")
+        rows, abs_diffs, band = [], [], []
+        zt_mismatch = 0
+        for e in em_boards_data:
+            t = tx_map.get(e.get("name"))
+            ec, tc = e.get("chg"), (t or {}).get("chg")
+            if not t or ec is None or tc is None:
+                continue
+            d = ec - tc
+            abs_diffs.append(abs(d))
+            ez, tz = e.get("zt") or 0, t.get("zt") or 0
+            if ez != tz:
+                zt_mismatch += 1
+            # 2.5% 触发线附近（两源任一落在 2.0~3.0%）记录是否跨阈值分歧
+            if 2.0 <= ec <= 3.0 or 2.0 <= tc <= 3.0:
+                band.append((ec > CHG_L1) != (tc > CHG_L1))
+            rows.append([ts, e.get("name"), round(ec, 3), round(tc, 3), round(d, 3),
+                         ez, tz, e.get("up"), t.get("up"), e.get("down"), t.get("down")])
+        if not rows:
+            log("[reconcile] 两源板块名无配对（成分映射口径可能不一致），跳过")
+            return
+        f = DIFF_DIR / f"{now:%Y-%m-%d}.csv"
+        new_file = not f.exists()
+        with open(f, "a", newline="", encoding="utf-8-sig") as fh:
+            w = csv.writer(fh)
+            if new_file:
+                w.writerow(DIFF_HEADER)
+            w.writerows(rows)
+        abs_diffs.sort()
+        n = len(abs_diffs)
+        med = abs_diffs[n // 2]
+        p90 = abs_diffs[min(n - 1, int(n * 0.9))]
+        within = sum(1 for x in abs_diffs if x <= 0.3) / n * 100
+        cross = sum(1 for x in band if x)
+        log(f"[reconcile] 双源对账：配对 {n} 板块，涨幅|差|中位 {med:.2f}/P90 {p90:.2f}/最大 {abs_diffs[-1]:.2f} 个百分点，"
+            f"|差|≤0.3pct 占 {within:.0f}%；涨停家数不一致 {zt_mismatch} 个；"
+            f"2.5%临界带跨阈值分歧 {cross}/{len(band)}")
+    except Exception as e:
+        log(f"[reconcile] 对账失败（不影响监测）：{type(e).__name__}: {e}")
+
+
 TRADE_CAL = WORKSPACE / "trade_cal.json"
 
 def load_trade_dates():
@@ -470,6 +527,7 @@ class Monitor:
             "HOLDINGS_CSV", str(ROOT / "config" / "holdings.csv")))
         self.pool = load_csv_codes(str(ROOT / "config" / "pool3_constituents.csv"))
         self.hint_shown = False   # 当天是否已提示过"未配置持仓"
+        self.last_reconcile = None  # 上次双源对账采样时间（东财可用时限频）
 
     def scan_once(self):
         now = datetime.now()
@@ -535,6 +593,13 @@ class Monitor:
 
         for b in boards:
             self._eval_board(b, zt_by_industry, zt_by_concept, n_zt, late, today, now)
+
+        # 东财可用时低频做一次双源口径对账（纯观测；东财被限的常态不触发、零额外开销）
+        if source == "eastmoney" and (
+                self.last_reconcile is None
+                or (now - self.last_reconcile).total_seconds() >= RECONCILE_INTERVAL_SEC):
+            reconcile_sources(now, boards, smap)
+            self.last_reconcile = now
         return source
 
     def _eval_board(self, b, zt_by_industry, zt_by_concept, n_zt, late, today, now):
