@@ -8,11 +8,19 @@ from .config import log
 
 
 def _is_zt_stock(zdf, code):
-    """个股是否触及涨停（按代码前缀区分 20cm / 10cm 涨跌停幅度）。"""
+    """个股是否触及涨停（按代码前缀区分 20cm / 10cm 涨跌停幅度）。
+
+    腾讯 spot 返回的 code 带市场前缀（sz300308 / sh688808 / bj830xxx / bj920xxx），
+    判定 20cm 前需先剥离 sh/sz/bj 前缀，否则创业/科创/北交票会落到 10cm 的 9.9%
+    分支而被误计涨停（ISSUES I16）。
+    注：北交所实际涨跌幅为 30%，当前与创业/科创同按 20cm(19.9) 桶处理（已知简化，另记）。
+    """
     import pandas as pd
     if zdf is None or pd.isna(zdf):
         return False
     c = str(code)
+    if len(c) > 6 and c[:2] in ("sh", "sz", "bj"):  # 剥离市场前缀，回到 6 位裸码
+        c = c[2:]
     if c.startswith(("30", "68", "8", "4", "92")):  # 创业/科创/北交 20cm
         return zdf >= 19.9
     return zdf >= 9.9

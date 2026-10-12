@@ -9,11 +9,14 @@ from .config import ROOT, log
 def normalize_code(c):
     """把各种写法的代码归一为带市场前缀的 6 位代码（sh600519 / sz000001 / bj830799）。"""
     c = str(c).strip().split(".")[0].zfill(6)
+    if c.startswith("920"):
+        # 北交所 920 新号段：必须先于下方 "9" 判断，否则会被误归为 sh（ISSUES I16）
+        return "bj" + c
     if c.startswith(("60", "68", "9")):
         return "sh" + c
     if c.startswith(("00", "30", "20")):
         return "sz" + c
-    if c.startswith(("8", "4", "92")):
+    if c.startswith(("8", "4")):
         return "bj" + c
     return "sz" + c
 

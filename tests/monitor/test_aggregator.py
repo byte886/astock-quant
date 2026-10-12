@@ -22,19 +22,30 @@ def test_is_zt_stock_plain_six_digit(code, zdf, zt):
     assert _is_zt_stock(zdf, code) is zt
 
 
-# 生产真实输入是带前缀码（腾讯 spot：sz300308/sh688808/bj830xxx）。
-# 锁定当前行为（ISSUES I16）：startswith("30"/"68"/"8") 对带前缀码不命中，
-# 创业/科创/北交 20cm 票也落到 9.9% 分支 -> 9.9% 即被误计涨停（涨停数虚高）。
-# 修复后本组三条 9.9% 应为 False；本次行为守恒，先锁定现状。
+# 生产真实输入是带前缀码（腾讯 spot：sz300308/sh688808/bj830xxx/bj920xxx）。
+# ISSUES I16 已修复：判定前剥离 sh/sz/bj 前缀，创业/科创/北交 20cm 票按 19.9 判，
+# 因此三条 9.9%（未达 20cm 涨停）均为 False；10cm 的 sh600/sz00 仍按 9.9 判涨停。
 @pytest.mark.parametrize("code,zdf,zt", [
-    ("sz300001", 9.9, True),
-    ("sh688001", 9.9, True),
-    ("bj830001", 9.9, True),
+    ("sz300001", 9.9, False),    # 创业 20cm，9.9% 未涨停
+    ("sh688001", 9.9, False),    # 科创 20cm，9.9% 未涨停
+    ("bj830001", 9.9, False),    # 北交（按 20cm 桶），9.9% 未涨停
+    ("bj920001", 9.9, False),    # 北交 920 新号段（按 20cm 桶），9.9% 未涨停
+    ("sz300001", 19.8, False),   # 创业 20cm，差 0.1 未涨停
     ("sz300001", 19.9, True),
-    ("sh600001", 9.9, True),
+    ("sh688001", 19.9, True),
+    ("bj830001", 19.9, True),
+    ("bj920001", 19.9, True),
+    ("sh600001", 9.9, True),     # 沪市 10cm，9.9% 涨停
+    ("sz000001", 9.9, True),     # 深市 10cm，9.9% 涨停
     ("sz000001", 9.8, False),
+    # —— 6 位裸码（无市场前缀）同样须按号段分桶，锁死 len(c) > 6 的边界 ——
+    ("300001", 9.9, False),      # 裸码创业 20cm：9.9% 未涨停（若 len>6 误写成 >=6，裸码被砍前缀会落到 10cm 误判 True）
+    ("300001", 19.9, True),
+    ("688001", 9.9, False),      # 裸码科创 20cm
+    ("600001", 9.9, True),       # 裸码沪市 10cm
+    ("000001", 9.8, False),      # 裸码深市 10cm
 ])
-def test_is_zt_stock_prefixed_current_behavior(code, zdf, zt):
+def test_is_zt_stock_prefixed_after_fix(code, zdf, zt):
     assert _is_zt_stock(zdf, code) is zt
 
 
@@ -74,9 +85,9 @@ def test_tx_board_agg_values():
     assert a["up"] == 2 and a["down"] == 1
     assert round(a["lb"], 6) == round(4.5 / 3, 6)
     b = by["B"]
-    # I16 锁定现状：两只均为带前缀的 20cm 码，9.9% 分支把它们都计为涨停 -> zt=2；
-    # 修复 20cm 判定后此处应为 1（仅 sz300003@19.9 真涨停）。
-    assert b["zt"] == 2 and b["up"] == 2
+    # ISSUES I16 已修复：sh688004@9.9 是科创 20cm、未涨停，不计 zt；
+    # 仅 sz300003@19.9 真涨停 -> zt=1（两只均上涨，up=2，涨幅均值不变）。
+    assert b["zt"] == 1 and b["up"] == 2
     assert round(b["chg"], 6) == round((19.9 + 9.9) / 2, 6)
     c = by["C"]
     assert c["zt"] == 1 and round(c["chg"], 6) == 19.9

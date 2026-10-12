@@ -62,8 +62,13 @@ def test_poll_closed(monkeypatch):
 
 
 def test_poll_success_normal(monkeypatch, no_push):
+    class _MorningDT(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 10, 12, 10, 0)   # 固定非尾盘：任何时刻运行都应走常态档 60s
+    monkeypatch.setattr(cli, "datetime", _MorningDT)
     monkeypatch.setattr(cli, "is_trading_time", lambda now: True)
-    st = cli._RunState(datetime.now())
+    st = cli._RunState(_MorningDT(2026, 10, 12, 10, 0))
     secs = cli._poll_once(_FakeMon(), st)
     assert secs == POLL_NORMAL and st.last_success is not None
 
@@ -97,8 +102,13 @@ def test_poll_recovery_pushes(monkeypatch, no_push):
 
 
 def test_poll_exception_selfcheck(monkeypatch, no_push):
+    class _MorningDT(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 10, 12, 10, 0)   # 固定非尾盘：异常自检后返回常态档 60s
+    monkeypatch.setattr(cli, "datetime", _MorningDT)
     monkeypatch.setattr(cli, "is_trading_time", lambda now: True)
-    st = cli._RunState(datetime.now())
+    st = cli._RunState(_MorningDT(2026, 10, 12, 10, 0))
     secs = cli._poll_once(_FakeMon(raise_exc=RuntimeError("x")), st)
     assert secs == POLL_NORMAL and len(no_push) == 1
 
