@@ -67,11 +67,15 @@ logs/
 .mypy_cache/
 .venv/
 
-# clean-code-gauntlet 质量工具产物（本地生成，勿入库）
+# clean-code-gauntlet 质量工具产物（本地生成、供阶段审查，勿入库）
+# 权威清单对齐 clean-code-gauntlet/examples/demo-python/.gitignore：.metrics/ target/ .coverage
 .metrics/
+target/
 .coverage
-target/coverage/
-target/mutation-workers/
+.coverage.*
+coverage.xml
+htmlcov/
+.mutmut-cache/
 
 # 个人/操盘手真实持仓，勿进公开仓库
 config/holdings.csv
