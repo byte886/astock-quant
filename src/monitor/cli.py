@@ -123,7 +123,7 @@ def main(argv=None):
     once = "--once" in argv
     build_only = "--build-map" in argv
     if build_only:
-        build_sector_map(datetime.now().strftime("%Y%m%d"))
+        build_sector_map(datetime.now().strftime("%Y%m%d"), background=False)
         return
     single_instance()
     m = Monitor()

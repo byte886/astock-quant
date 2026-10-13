@@ -10,6 +10,7 @@
 import sys
 import json
 import time
+import threading
 import subprocess
 from datetime import datetime, time as dtime
 
@@ -158,22 +159,42 @@ def _cached_sector_map(today):
         return None
 
 
-def build_sector_map(today):
-    """构建 code -> [kind:板块名,...] 映射并缓存；东财不全时追加新浪兜底。空缓存重建。"""
-    cached = _cached_sector_map(today)
-    if cached is not None:
-        return cached
+# 行业（industry）是盘中板块监控的主维度；一份映射至少要覆盖这么多只行业成分股，
+# 才算"行业维度完整"。正常东财全市场约 5000 只；设 100 用于区分"完整"与"行业整体缺失"。
+MIN_INDUSTRY_COVERED = 100
+
+
+def _industry_count(data):
+    """统计映射中带行业（industry:）标签的股票数。"""
+    return sum(1 for tags in data.values()
+               if any(isinstance(t, str) and t.startswith("industry:") for t in tags))
+
+
+def _map_adequate(data):
+    """映射是否足以用于盯盘：非空且行业维度覆盖达标。"""
+    return bool(data) and _industry_count(data) >= MIN_INDUSTRY_COVERED
+
+
+# 正在后台构建映射的日期集合（single-flight，防止多轮扫描重复起抓取线程）。
+_map_building = set()
+_map_build_lock = threading.Lock()
+
+
+def _build_and_cache_sector_map(today):
+    """同步抓取当日板块成分映射并写缓存，返回 dict（盘前预建与后台线程共用）。"""
     import akshare as ak
     c2b = {}
-    ok = False
+    got = {}
     for kind, fn in [("industry", ak.stock_board_industry_cons_em),
                      ("concept", ak.stock_board_concept_cons_em)]:
         names = _em_board_names(kind)
-        if names:
-            ok = True
+        got[kind] = bool(names)
         _collect_em_cons(c2b, kind, fn, names)
-    if not ok or len(c2b) < 100:
-        log("[build_map] 东财成分不完整，追加新浪板块成分兜底")
+    # 行业是盘中主维度：行业板块名整体缺失，或成分总量过少，都追加新浪兜底。
+    # 概念维度为补充，且新浪概念口径与东财不一致，概念缺失不强制补（行业在即可盯盘）。
+    if not got.get("industry") or len(c2b) < 100:
+        log(f"[build_map] 东财行业板块缺失或成分不足（行业={got.get('industry')} "
+            f"概念={got.get('concept')} 股票={len(c2b)}），追加新浪板块成分兜底")
         try:
             c2b.update(_sina_sector_map())
         except Exception as e:
@@ -181,8 +202,72 @@ def build_sector_map(today):
     out = {k: sorted(v) for k, v in c2b.items()}
     cache = WORKSPACE / f"sector_map_{today}.json"
     cache.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-    log(f"[build_map] 完成：{len(out)} 只股票映射 -> {cache.name}")
+    industry_n = _industry_count(out)
+    if industry_n < MIN_INDUSTRY_COVERED:
+        log(f"[build_map] ⚠️ 行业映射仍缺失：仅 {industry_n} 只含行业标签，行业板块聚合兜底可能不可用")
+    log(f"[build_map] 完成：{len(out)} 只股票映射（行业覆盖 {industry_n}）-> {cache.name}")
     return out
+
+
+def _latest_stale_map(exclude_today):
+    """当日缓存未就绪时，优先返回最近一份"含行业维度"的历史映射兜底；
+    若历史映射都缺行业，才降级返回最近一份（至少有概念），全无返回 None。"""
+    fallback = None
+    fallback_name = None
+    for path in reversed(sorted(WORKSPACE.glob("sector_map_*.json"))):
+        if path.name == f"sector_map_{exclude_today}.json":
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not data:
+            continue
+        if _map_adequate(data):
+            log(f"[build_map] 当日缓存未就绪，先用最近完整历史映射 {path.name} 兜底"
+                f"（行业覆盖 {_industry_count(data)}），当日映射在后台构建")
+            return data
+        if fallback is None:
+            fallback, fallback_name = data, path.name
+    if fallback is not None:
+        log(f"[build_map] 无完整历史映射，降级用最近映射 {fallback_name}（行业维度可能缺失）")
+    return fallback
+
+
+def _spawn_map_build(today):
+    """single-flight 后台构建当日映射；已在构建则不重复起线程。"""
+    with _map_build_lock:
+        if today in _map_building:
+            return
+        _map_building.add(today)
+    log("[build_map] 当日缓存缺失，已在后台单飞构建")
+
+    def _work():
+        try:
+            _build_and_cache_sector_map(today)
+        except Exception as e:
+            log(f"[build_map] 后台构建失败：{type(e).__name__}")
+        finally:
+            with _map_build_lock:
+                _map_building.discard(today)
+
+    threading.Thread(target=_work, name=f"build-sector-map-{today}", daemon=True).start()
+
+
+def build_sector_map(today, background=True):
+    """获取板块成分映射（供扫描每轮调用，绝不阻塞开盘）：
+    - 当日缓存就绪：直接返回；
+    - background=True（盘中默认）：当日缓存缺失时后台 single-flight 构建，本函数立即返回
+      最近历史映射兜底（无则空 dict），后续轮次自动读到建好的当日缓存；
+    - background=False：同步抓取并写缓存（盘前 --build-map 预建用）。
+    """
+    if not background:
+        return _build_and_cache_sector_map(today)
+    cached = _cached_sector_map(today)
+    if cached is not None:
+        return cached
+    _spawn_map_build(today)
+    return _latest_stale_map(today) or {}
 
 
 # ---------------- 交易日历 ----------------

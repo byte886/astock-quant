@@ -148,9 +148,15 @@ def test_main_build_map(monkeypatch):
         raise AssertionError("build-map 不应取单例锁")
     monkeypatch.setattr(cli, "single_instance", _forbid)
     seen = {}
-    monkeypatch.setattr(cli, "build_sector_map", lambda d: seen.setdefault("d", d))
+
+    def _fake_build(d, **kw):
+        seen["d"] = d
+        seen["kw"] = kw
+        return {}
+    monkeypatch.setattr(cli, "build_sector_map", _fake_build)
     cli.main(["prog", "--build-map"])
     assert seen["d"] == datetime.now().strftime("%Y%m%d")
+    assert seen["kw"].get("background") is False   # 盘前必须同步建完（杀 False->True）
 
 
 def test_main_once(monkeypatch, no_push):

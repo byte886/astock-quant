@@ -13,6 +13,13 @@ from datetime import datetime
 for _k in list(os.environ):
     if "proxy" in _k.lower():
         os.environ.pop(_k, None)
+# 上面只清了环境变量，但 requests/urllib 在 macOS 上仍会读取"系统代理"（网络设置里的
+# HTTP/SOCKS 代理，多由代理客户端开启），akshare 走 requests 时仍会被劫持。本链路全部
+# 是国内行情/企微接口，必须直连：no_proxy=* 使 requests 的 should_bypass_proxies 对任意
+# 主机返回 True，彻底绕过系统代理。修复 2026-10-13 开盘 akshare 取东财板块名被系统代理
+# 劫持报 ProxyError、板块映射拖到 09:46 才建成、开盘头 16 分钟漏盯的问题。
+os.environ["no_proxy"] = "*"
+os.environ["NO_PROXY"] = "*"
 
 # 项目根：线上为 src/monitor 的上两级；测试可用 MON_ROOT 指向隔离临时目录。
 ROOT = Path(os.environ.get("MON_ROOT", Path(__file__).resolve().parents[2]))

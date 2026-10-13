@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  盘前板块成分映射预建任务（com.astock-quant.build-sector-map）
+
+  每个工作日（周一至周五）09:13 跑一次 intraday_sector_monitor.py --build-map，
+  在 09:30 开盘前把当日板块成分映射 sector_map_YYYYMMDD.json 建好。
+
+  背景：2026-10-13 开盘板块映射在开盘后懒加载、且被 macOS 系统代理劫持，拖到
+  09:46 才建成，造成 9:30–9:46 开盘盲区漏盯。修复=①config 强制 no_proxy 直连；
+  ②扫描侧当日缓存缺失时用最近历史映射兜底、后台单飞构建（不阻塞）；
+  ③本任务在盘前同步预建，作为双保险。
+
+  部署（在仓库根目录执行）：
+    mkdir -p ~/Library/LaunchAgents
+    cp scripts/launchd/com.astock-quant.build-sector-map.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.astock-quant.build-sector-map.plist
+  立即手动触发一次验证：
+    launchctl kickstart gui/$(id -u)/com.astock-quant.build-sector-map
+  停用：
+    launchctl bootout gui/$(id -u)/com.astock-quant.build-sector-map
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.astock-quant.build-sector-map</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/wenjiechen/bin/A股量化-盘前建映射</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Users/wenjiechen/Desktop/astock-quant</string>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>13</integer></dict>
+		<dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>13</integer></dict>
+		<dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>13</integer></dict>
+		<dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>13</integer></dict>
+		<dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>13</integer></dict>
+	</array>
+	<key>StandardOutPath</key>
+	<string>/Users/wenjiechen/Desktop/astock-quant/data/_workspace/build_map.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/wenjiechen/Desktop/astock-quant/data/_workspace/build_map.log</string>
+</dict>
+</plist>

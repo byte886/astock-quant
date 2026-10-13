@@ -6,6 +6,7 @@
 - 核验日期：2026-10-12（I16 修复后同日复核）
 - 核验轮次：初版全量第四轮 Total 328 / Killed 266 / Survived 13 / Uncovered 49；**I16 修复（aggregator 剥离市场前缀 + codes 920 归 bj）后全量复核 Total 331 / Killed 267 / Survived 15 / Uncovered 49**——新增 2 个存活均位于本次新增的前缀剥离行 aggregator.py:22，经手动注入变异 + 裸码/前缀用例交叉验证确认为等价体，登记后存活=0。
 - 核验方式：逐条重读源码 + 推导可达路径 + 现有/新增测试交叉确认（aggregator.py:22 两条额外做了"临时改源码跑测试"的变异实证）
+- 2026-10-13 复核（I18 行业完整性加固）：`build_sector_map` 拆为同步构建 / 后台单飞 / 历史兜底，`_build_and_cache` 改用 `got` 按 kind 记录、只守行业维度，新增 `_industry_count`/`_map_adequate`。原 `datasources.py:168 ok=False` 等价体随代码重写删除；新码点经补测试（行业覆盖 100/99 边界告警、后台建映射 daemon 线程、盘前 `--build-map` 同步 `background=False`）后 **datasources 40 killed/0 survived、cli 0 survived，未产生新等价体**；其余存活仍为本表已登记的 14 条（行号随重构移动、逻辑未变）。
 
 | 位置 | 变异 | 等价性说明 | 核验人 | 日期 |
 |------|------|-----------|--------|------|
@@ -13,7 +14,6 @@
 | `src/monitor/aggregator.py:22` `if len(c) > 6 and c[:2] in ("sh","sz","bj"): c = c[2:]`（剥离市场前缀） | `>` → `>=` | 有效 code 只有两类：6 位纯数字裸码（c[:2] 为 60/30/00/68 等数字，绝不为 sh/sz/bj）、或"2 字母前缀+6 位数字"恒长 8 的带前缀码。`>=6` 与 `>6` 的唯一差别在 len 恰为 6，但此时第二子句 `c[:2]∈{sh,sz,bj}` 对纯数字裸码必为 False，`and` 整体仍 False、不剥离；len=7 的有效码不存在。两版剥离决策完全相同。已手动把 `>6` 改成 `>=6` 后跑全部裸码/前缀用例（17 条）全过，实证不可区分。 | 人工核验 | 2026-10-12 |
 | `src/monitor/aggregator.py:22` 同上剥离条件 | `and` → `or` | `or` 与 `and` 产生差异需"`len(c)>6` 为 False 但 `c[:2]∈{sh,sz,bj}` 为 True"，即 len≤6 却以 sh/sz/bj 开头的串；有效裸码恒为 6 位纯数字、不存在此种串，带前缀码恒长 8（第一子句也为 True）。故两版结果一致，同样经手动变异 + 17 条用例全过实证。 | 人工核验 | 2026-10-12 |
 | `src/monitor/config.py:63` `print(line, flush=True)` | `True` → `False` | flush 只控制 stdout 缓冲刷新时机，不改变是否打印与打印内容；日志另由独立文件写入落盘，运行期/退出时缓冲都会输出，无可观测差异。 | 人工核验 | 2026-10-12 |
-| `src/monitor/datasources.py:168` `ok = False` | `False` → `True` | ok 仅在 `if names: ok=True` 置位。两类 names 全空时 `_collect_em_cons` 执行 0 次、c2b 必为空，结尾 `len(c2b) < 100` 为 True 仍触发新浪兜底；任一 names 非空时 ok 正常也被设为 True。初值取 False/True，最终兜底决策一致。 | 人工核验 | 2026-10-12 |
 | `src/monitor/monitor.py:166` `max(int(st.get("peak_zt") or 0), sig["zt"])` | `or` → `and` | 该表达式只在「同波无台阶静默」分支求值，此时 st 必已由 `begin_new_wave` 建立并含 `peak_zt=zt_n`（达标时 ≥3，真值），`st.get("peak_zt")` 必命中真值，`or 0` 分支不可达，max 结果不变。 | 人工核验 | 2026-10-12 |
 | `src/monitor/monitor.py:166` 同上 `st.get("peak_zt", 0)` | `0` → `1` | 同上：st 必含 peak_zt 键且为真值，get 的默认值（0 或 1）永不可达。 | 人工核验 | 2026-10-12 |
 | `src/monitor/monitor.py:178` `int(st.get("fire_count", 0)) + 1` | `0` → `1` | 到达 `_emit_alert` 的 st 都经过 `begin_new_wave`，其初始化字典显式写入 `"fire_count": int(old.get("fire_count", 0))`，键必存在，get 默认值不可达。 | 人工核验 | 2026-10-12 |
