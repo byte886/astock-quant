@@ -4,6 +4,13 @@
 
 ## 项目定位
 
+**两条主线（代码包 / 后台任务 / 数据目录 / 文档均按此划分，三线包互不依赖，边界由 pyproject 契约守护）**：
+
+- **量子系统**——多因子选股 + 模拟盘验证"能否复现超额"：代码 `src/quant/`（数据/因子/回测）+ `src/execution/`（模拟盘撮合）；盘后/月度运行（每日 18:30 模拟盘、盘后增量补数）。
+- **交易外脑**——克隆操盘手判断、盘中实时盯板块异动并企微推送：代码 `src/monitor/`；盘中 9:30–15:00 扫描 + 盘前 9:13 预建板块映射。
+
+> 概念↔代码↔数据↔后台任务↔文档的完整对照见 `docs/DOCUMENTATION_MAP.md`「两条主线对照总表」。
+
 - **市场**：A 股个股 + ETF（剔科创板、不要北交所）；基准沪深300
 - **策略方向**：主线多因子选股——价值（TTM 股息率+连续分红）/ 成长（YOYNI+ROE），月度调仓、15 只等权；ETF 轮动为早期 MVP（回测年化约 2%、已搁置）
 - **技术栈**：自研 pandas 轻量引擎（`src/quant/`：data/factors/engine/metrics/viz）+ 模拟盘（`src/execution/`），不引入 qlib/vn.py 等重型框架
@@ -49,9 +56,10 @@
 ├── 09_调研底稿与素材/      # 原始资料、视频文稿、引用（只读）
 ├── 99_复盘与退役总结/      # 项目完成后写
 ├── docs/                   # 工程文档（WORKFLOW/REQUIREMENTS/项目维护SOP/DIRECTORY_STRUCTURE/DOCUMENTATION_MAP/HANDOFF）
-├── src/                    # 源代码
-│   ├── quant/              # 量化核心：data/factors/engine/metrics/viz
-│   └── execution/          # 执行层：paper_trading 模拟盘
+├── src/                    # 源代码（两条主线、三个包互不依赖，边界由 pyproject 契约守护）
+│   ├── quant/              # 【量子系统】量化核心：data/factors/engine/metrics/viz
+│   ├── execution/          # 【量子系统】执行层：paper_trading 模拟盘
+│   └── monitor/            # 【外脑】盘中板块异动监控：cli/monitor/datasources/statemachine/aggregator/notifier/reconcile/persistence/codes/config
 ├── config/                 # 配置与池子（default_*、pool3_constituents.csv 入库；local_* 不入库）
 ├── scripts/                # 可执行脚本（下载/回测/扫描/体检，清单见文档地图）
 ├── tests/                  # 测试

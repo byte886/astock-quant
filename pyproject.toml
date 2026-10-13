@@ -36,3 +36,15 @@ layers = [
   "src.monitor.codes",
   "src.monitor.config",
 ]
+
+# 两条主线边界：量子系统（quant + execution）与外脑（monitor）三个包互不依赖。
+# 现状物理零交叉（量子与外脑通过数据文件/信号解耦，模拟盘不直接 import 因子代码）；
+# 此契约把边界固化进质量门，防止后续改动误写跨线 import。
+[[tool.importlinter.contracts]]
+name = "Two-line independence: quantum (src.quant + src.execution) vs outer-brain (src.monitor)"
+type = "independence"
+modules = [
+  "src.quant",
+  "src.execution",
+  "src.monitor",
+]

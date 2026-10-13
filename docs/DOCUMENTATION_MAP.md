@@ -3,9 +3,29 @@
 > 文档类型：Reference（参考资料 — 文档索引）
 > 更新频率：每次新增/删除/移动文档时
 > 读者：AI代理（快速定位文档）和人类（查找文档时）
-> 最后更新：2026-10-12
+> 最后更新：2026-10-13
 
 > 本文档是项目所有文档的导航入口，告诉AI和人"先读什么、去哪里找什么"。
+
+---
+
+## 两条主线对照总表（先看这张，判清你在动哪条线）
+
+> 项目有**两条相互独立、最终汇于一个交易 Agent** 的主线。三个代码包**互不 import（物理隔离）**，`pyproject.toml` 的 import-linter 契约守护边界——改一条线不影响另一条。
+
+| 维度 | 量子系统 | 交易外脑（外脑） |
+|---|---|---|
+| **一句话目标** | 多因子选股 + 模拟盘验证"能否复现超额"，先模拟后小资金、人工扣扳机 | 克隆操盘手（魏强）的判断，盘中实时盯板块异动并推送，替他省盯盘复盘 |
+| **代码包** | `src/quant/`（data/factors/engine/metrics/viz）＋`src/execution/`（paper_trading 模拟盘） | `src/monitor/`（cli/monitor/datasources/statemachine/aggregator/notifier/reconcile/persistence/codes/config） |
+| **入口脚本** | 回测/因子脚本在 `scripts/`；模拟盘 `scripts/run_paper_trading.py`；盘后编排 `scripts/daily_after_close.sh` | `scripts/intraday_sector_monitor.py`（薄入口，逻辑在包内）、`scripts/query_alerts.py` |
+| **数据目录** | `data/raw`（baostock 日线/5分钟/财务）、`data/paper`（模拟盘账户）、`results/paper_trading`（净值） | `data/_workspace`（板块映射/快照/日志/双源对账）、`data/intraday_alerts`（预警留痕） |
+| **常驻后台任务** | `incremental-worker`（盘后 15:05 增量补数）、`daily-after-close`（周一至五 18:30 推进模拟盘） | `intraday-monitor`（9:30–15:00 盯盘企微推送）、`build-sector-map`（周一至五 09:13 预建板块映射） |
+| **运行时段** | 盘后/月度（T+1 开盘成交、月度调仓），不盘中运行 | 盘中实时（轮询 60s，14:30 后 30s；集合竞价不盯） |
+| **需求章节** | `REQUIREMENTS.md` §5.1–5.7（数据/因子/回测/选股/工作流/风控/AI）、§8.3 | `REQUIREMENTS.md` §5.8（盘中实时板块异动监测器） |
+| **核心文档** | `docs/WORKFLOW.md` 四阶段、`00_项目总纲.md` G2/G3 | `docs/板块异动监测_上线说明.md`（v2）、`docs/盘中监控重构报告_*.md`、`02_决策记录/ADR-007` |
+| **当前阶段** | G2 已过（价值年化 13.0%、Conditional Go；成长 Hold），G3 模拟盘跟踪中（2026-09-21 起） | 盘中监控 v2 已上线（2026-10-12 模块化重构、10-13 I18 开盘盲区加固）；3 号池扫描器 v2 待操盘手校准（T30） |
+
+> 两者的关系：外脑负责"盘中实时盯盘、找当下板块异动"，量子系统负责"按多因子模型盘后选股、模拟盘验证"；终态汇入一个交易 Agent，**人工扣扳机、永不自动下单**。
 
 ---
 

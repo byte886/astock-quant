@@ -37,9 +37,10 @@ astock-quant/
 ├── README.md                   # 项目概览（给人看）
 ├── AGENTS.md                   # AI操作手册（命令式）
 ├── .gitignore
-├── src/                        # 源代码
-│   ├── quant/                  # 量化核心：data/factors/engine/metrics/viz
-│   └── execution/              # 执行层：paper_trading 模拟盘
+├── src/                        # 源代码（两条主线、三个包互不依赖，边界由 pyproject 契约守护）
+│   ├── quant/                  # 【量子系统】量化核心：data/factors/engine/metrics/viz
+│   ├── execution/              # 【量子系统】执行层：paper_trading 模拟盘
+│   └── monitor/                # 【外脑】盘中板块异动监控：cli/monitor/datasources/statemachine/aggregator/notifier/reconcile/persistence/codes/config
 ├── config/                     # 配置（default_*、池子csv 入库；local_* 不入库；密钥走环境变量）
 ├── scripts/                    # 可执行脚本（下载/回测/扫描/体检，清单见文档地图）
 ├── tests/                      # 测试
