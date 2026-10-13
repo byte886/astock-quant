@@ -21,10 +21,19 @@
 3. 项目事实（技术栈/数据来源/约定）：`AGENTS.md` 第3节
 4. 跨会话稳定结论：（工程记忆暂未启用，需要时查 ADR）
 
+### 常驻后台任务（launchd）
+> **当前常驻 4 个，权威清单见 [`scripts/launchd/README.md`](../scripts/launchd/README.md)**（含部署/停用命令）。AI 接手先 `launchctl list | grep astock` 核对实际进程。
+1. `intraday-monitor`：外脑盘中板块异动监控，9:30–15:00 扫描并企微推送
+2. `build-sector-map`：盘前周一至五 09:13 预建当日板块成分映射（防开盘盲区）
+3. `incremental-worker`：量子系统盘后 15:05 起每日行情增量补数（常驻）
+4. `daily-after-close`：周一至五 18:30 收盘后推进模拟盘
+5. 已停用归档（2026-10-13）：`download-data`/`download-monitor`/`fundamentals`/`open-check`，plist 在 `~/Library/LaunchAgents/_archived_20261013/`，脚本保留可手动续跑（fundamentals 尚差约 93 只，跑月度多因子前补）
+
 ### 数据下载与管理
-1. 数据下载：`scripts/download_data.py`（baostock 日线/5分钟，断点续传）+ `scripts/download_monitor.py`（launchd 自愈巡检）；流程见 `docs/WORKFLOW.md` 阶段①，口径见 `docs/数据资产清单.md`
-2. 数据来源与凭证：`AGENTS.md` 第3节
-3. 目录结构与存储分工：`docs/DIRECTORY_STRUCTURE.md` §〇；文件/目录命名规范：同文档 §五（唯一事实源）
+1. 历史补下载：`scripts/download_data.py`（baostock 日线/5分钟，断点续传）——历史已 100% 下完、launchd 任务已归档停用；流程见 `docs/WORKFLOW.md` 阶段①，口径见 `docs/数据资产清单.md`
+2. 日常增量：由常驻 `incremental-worker` 每日盘后追加，不再用一次性下载脚本
+3. 数据来源与凭证：`AGENTS.md` 第3节
+4. 目录结构与存储分工：`docs/DIRECTORY_STRUCTURE.md` §〇；文件/目录命名规范：同文档 §五（唯一事实源）
 
 ### 框架与因子方案（已定，留档）
 1. 量化框架：已决策**自研 pandas 轻量引擎**（`src/quant/`），不引入 qlib/vn.py，理由见 `docs/HANDOFF.md` §2 与 ADR
@@ -134,9 +143,9 @@
 
 | 分组 | 脚本 | 用途 |
 |---|---|---|
-| 数据下载 | `scripts/download_data.py` | Baostock 个股日线/5分钟，前复权、断点续传、防限流（launchd 后台单例） |
-| 数据下载 | `scripts/download_monitor.py` | launchd 每 15 分钟自愈巡检、失败补下 |
-| 数据下载 | `scripts/download_fundamentals.py` | 中证800 财务三表（profit/growth/dividend） |
+| 数据下载 | `scripts/download_data.py` | Baostock 个股日线/5分钟，前复权、断点续传、防限流（历史已 100% 下完，launchd 任务 2026-10-13 归档停用，手动续跑用） |
+| 数据下载 | `scripts/download_monitor.py` | download_data 的看门狗（launchd 自愈巡检），随主任务 2026-10-13 归档停用 |
+| 数据下载 | `scripts/download_fundamentals.py` | 中证800 财务三表（profit/growth/dividend）；已下 707/约800，launchd 任务归档，跑月度多因子前补约 93 只 |
 | 数据下载 | `scripts/download_csi800_daily.py` | 中证800 成分日线补齐 |
 | 数据下载 | `scripts/download_etf.py` / `download_etf_akshare.py` / `download_etf_playwright.py` | ETF 行情多通道（baostock/akshare/浏览器兜底）；akshare 东财失败自动回退新浪源、失败返回 rc=1 |
 | 数据下载 | `scripts/update_daily_after_close.py` | 盘后增量补个股日线（`--codes/--lookback`，幂等扫描，失败 exit 1） |
