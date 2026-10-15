@@ -8,11 +8,12 @@ import os
 from datetime import datetime, time as dtime
 
 from . import statemachine as sm
-from .config import RECONCILE_INTERVAL_SEC, THRESHOLD_SNAP, log
+from .config import (RECONCILE_INTERVAL_SEC, THRESHOLD_SNAP,
+                     LEADER_LIMIT, LEADER_UP_MIN, log)
 from .codes import load_csv_codes, default_holdings_path, default_pool_path
 from .datasources import (em_boards, tx_spot, zt_pool, sina_boards,
                           build_sector_map)
-from .aggregator import tx_board_agg
+from .aggregator import tx_board_agg, board_stock_detail
 from .reconcile import reconcile_sources
 from .notifier import push
 from .persistence import (append_alert, save_snapshot,
@@ -51,21 +52,27 @@ class Monitor:
         return boards, ("sina" if boards else None)
 
     def _fetch_boards(self, today):
-        """取板块行情，按 东财→腾讯聚合→新浪兜底 降级；返回 (boards, source)。"""
+        """取板块行情，按 东财→腾讯聚合→新浪兜底 降级；返回 (boards, source, spot_df)。
+
+        spot_df 仅腾讯兜底路径产出；主源/新浪路径返回 None，由 scan_once 补拉
+        （个股快照供板块触发时列出涨停/领涨个股）。
+        """
         boards = (em_boards("concept") or []) + (em_boards("industry") or [])
         if boards:
-            return boards, "eastmoney"
+            return boards, "eastmoney", None
         log("[scan] 东财板块无数据，尝试腾讯 spot 聚合兜底")
         try:
             smap_now = build_sector_map(today)
         except Exception:
             smap_now = {}
-        tx_boards = tx_board_agg(smap_now, tx_spot())
+        spot_df = tx_spot()
+        tx_boards = tx_board_agg(smap_now, spot_df)
         if tx_boards:
             log(f"[scan] 腾讯聚合兜底成功：{len(tx_boards)} 板块（维度完整）")
-            return tx_boards, "tencent_agg"
+            return tx_boards, "tencent_agg", spot_df
         log("[scan] 腾讯聚合兜底失败，启用新浪板块兜底")
-        return self._sina_fallback_boards()
+        boards, source = self._sina_fallback_boards()
+        return boards, source, None
 
     # ---------- 涨停归集 ----------
     @staticmethod
@@ -112,7 +119,9 @@ class Monitor:
         today = now.strftime("%Y%m%d")
         late = now.time() >= dtime(14, 30)
 
-        boards, source = self._fetch_boards(today)
+        boards, source, spot_df = self._fetch_boards(today)
+        if spot_df is None:
+            spot_df = tx_spot()   # 主源成功时补拉个股快照，供板块触发时列领涨个股
 
         zt = zt_pool(today) or []
         zt_by_industry, zt_codes, n_zt = self._build_zt_index(zt)
@@ -129,17 +138,18 @@ class Monitor:
         self._fill_zt(boards, zt_by_industry, zt_by_concept)
         save_snapshot(now, boards, source)
 
+        watch_set = set(self.holdings) | set(self.pool)
         for b in boards:
-            self._eval_board(b, zt_by_industry, zt_by_concept, n_zt, late, now,
-                             source)
+            self._eval_board(b, zt, zt_by_industry, zt_by_concept, n_zt, late,
+                             now, source, sector_map, spot_df, watch_set)
 
         self._maybe_reconcile(now, source, boards, sector_map)
         save_board_states(self.states)
         return source
 
     # ---------- 单板块评估（编排状态机纯函数） ----------
-    def _eval_board(self, b, zt_by_industry, zt_by_concept, n_zt, late, now,
-                    source):
+    def _eval_board(self, b, zt, zt_by_industry, zt_by_concept, n_zt, late, now,
+                    source, sector_map, spot_df, watch_set):
         """对单个板块做一轮评估：分级 → 宽限/波次 → 决定推送则交 _emit_alert。"""
         sig = sm.classify_signal(b, zt_by_industry, zt_by_concept, late)
         if sig is None:
@@ -172,10 +182,12 @@ class Monitor:
             level, stage_tag = decision
 
         self._emit_alert(key, sig, n_zt, conc_ratio, level, stage_tag,
-                         relaunch_gap, st, snap, now, source)
+                         relaunch_gap, st, snap, now, source,
+                         zt, sector_map, spot_df, watch_set)
 
     def _emit_alert(self, key, sig, n_zt, conc_ratio, level, stage_tag,
-                    relaunch_gap, st, snap, now, source):
+                    relaunch_gap, st, snap, now, source,
+                    zt, sector_map, spot_df, watch_set):
         """本轮确定推送：计数 → 组装消息 → 推送/落台账 → 回写状态（副作用集中处）。"""
         st["fire_count"] = int(st.get("fire_count", 0)) + 1
         fire_no = st["fire_count"]
@@ -186,9 +198,13 @@ class Monitor:
         chg, zt_n, speed, lb, upr = (sig["chg"], sig["zt"], sig["speed"],
                                      sig["lb"], sig["up_ratio"])
         hold_tags, hint_line = self._hold_hint()
+        stocks = board_stock_detail(sig["name"], zt, sector_map, spot_df,
+                                    watch_set, limit=LEADER_LIMIT,
+                                    up_min=LEADER_UP_MIN)
         title, msg = sm.build_alert_message(
             sig, n_zt, conc_ratio, level, stage_tag, fire_no,
-            relaunch_gap, st, now, hold_tags, hint_line, source)
+            relaunch_gap, st, now, hold_tags, hint_line, source,
+            stocks=stocks)
         push(title, msg)
         append_alert({
             "时间": datetime.now().strftime("%H:%M:%S"), "级别": level,

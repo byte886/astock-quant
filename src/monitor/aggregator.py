@@ -102,3 +102,65 @@ def tx_board_agg(mapping, tx_df):
     except Exception as e:
         log(f"[tx_agg] 聚合失败：{type(e).__name__}")
         return None
+
+
+def _belongs_to_board(tags, board_name):
+    """该票的成分标签中是否包含指定板块名（行业/概念同名都命中）。"""
+    for tag in tags or []:
+        if tag.partition(":")[2] == board_name:
+            return True
+    return False
+
+
+def board_stock_detail(board_name, zt, mapping, spot_df, watch_set,
+                       limit=10, up_min=3.0):
+    """触发板块的"带动个股"明细：涨停封板股优先、未涨停领涨股补齐，总数≤limit。
+
+    数据来源：涨停来自东财涨停池 zt（含连板数、所属行业，行业按官方 industry、
+    概念按 mapping 反查）；领涨来自腾讯全市场快照 spot_df 配合成分映射 mapping，
+    且只取涨幅≥up_min 的（避免把没涨的票凑成"伪领涨"）。任一路缺失都不抛错——
+    spot 缺失时只给涨停名单，绝不影响主推送。
+    返回 list[dict(code,name,zdf,lianban,is_zt,star)]，已按展示顺序排序并截断。
+    """
+    import pandas as pd
+
+    zt_items = {}  # code -> dict（行业/概念双口径可能重复，按 code 去重）
+    for z in (zt or []):
+        code = z.get("code")
+        tags = (mapping or {}).get(code)
+        if z.get("industry") == board_name or _belongs_to_board(tags, board_name):
+            zt_items[code] = {
+                "code": code, "name": z.get("name") or code,
+                "zdf": None, "lianban": int(z.get("lianban") or 1),
+                "is_zt": True,
+            }
+
+    up_items = {}  # 非涨停领涨股，按涨幅取剩余名额
+    if spot_df is not None and not getattr(spot_df, "empty", True) and mapping:
+        try:
+            candidates = []
+            for _, r in spot_df.iterrows():
+                code = r.get("code")
+                if code in zt_items or not _belongs_to_board(mapping.get(code), board_name):
+                    continue
+                zdf = r.get("zdf")
+                if zdf is None or pd.isna(zdf):
+                    continue
+                zdf = float(zdf)
+                if up_min is not None and zdf < up_min:
+                    continue
+                candidates.append((zdf, code, r.get("name") or code))
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            for zdf, code, nm in candidates[:max(0, limit - len(zt_items))]:
+                up_items[code] = {"code": code, "name": nm, "zdf": zdf,
+                                  "lianban": 1, "is_zt": False}
+        except Exception:
+            up_items = {}
+
+    zt_list = sorted(zt_items.values(), key=lambda s: -s["lianban"])
+    up_list = sorted(up_items.values(), key=lambda s: -(s["zdf"] or 0.0))
+    out = (zt_list + up_list)[:limit]
+    watch = watch_set or set()
+    for s in out:
+        s["star"] = s["code"] in watch
+    return out

@@ -48,7 +48,7 @@ def test_fill_zt():
 # ---------------- 取数降级链 ----------------
 def test_fetch_boards_eastmoney(mon, monkeypatch):
     monkeypatch.setattr(M, "em_boards", lambda kind: [bk()] if kind == "concept" else [])
-    boards, source = mon._fetch_boards("20261012")
+    boards, source, _spot = mon._fetch_boards("20261012")
     assert source == "eastmoney" and boards
 
 
@@ -57,7 +57,7 @@ def test_fetch_boards_tencent_fallback(mon, monkeypatch):
     monkeypatch.setattr(M, "build_sector_map", lambda d: {})
     monkeypatch.setattr(M, "tx_spot", lambda: pd.DataFrame())
     monkeypatch.setattr(M, "tx_board_agg", lambda smap, df: [bk()])
-    boards, source = mon._fetch_boards("20261012")
+    boards, source, _spot = mon._fetch_boards("20261012")
     assert source == "tencent_agg" and boards
 
 
@@ -68,7 +68,7 @@ def test_fetch_boards_tencent_map_raises_still_agg(mon, monkeypatch):
     monkeypatch.setattr(M, "build_sector_map", _raise)
     monkeypatch.setattr(M, "tx_spot", lambda: pd.DataFrame())
     monkeypatch.setattr(M, "tx_board_agg", lambda smap, df: [bk()])
-    _, source = mon._fetch_boards("20261012")
+    _, source, _spot = mon._fetch_boards("20261012")
     assert source == "tencent_agg"
 
 
@@ -79,7 +79,7 @@ def test_fetch_boards_sina_fallback(mon, monkeypatch):
     monkeypatch.setattr(M, "tx_board_agg", lambda smap, df: None)
     monkeypatch.setattr(M, "sina_boards",
                         lambda ind: [{"name": "S", "chg": 1.0, "amount": 1}] if ind == "概念" else [])
-    boards, source = mon._fetch_boards("20261012")
+    boards, source, _spot = mon._fetch_boards("20261012")
     assert source == "sina" and boards[0]["name"] == "S"
 
 
@@ -103,11 +103,42 @@ def test_scan_once_emits_and_persists(mon, monkeypatch, no_push):
                         if kind == "concept" else [])
     monkeypatch.setattr(M, "zt_pool", lambda d: [])
     monkeypatch.setattr(M, "build_sector_map", lambda d: {})
+    monkeypatch.setattr(M, "tx_spot", lambda: pd.DataFrame())
     source = mon.scan_once()
     assert source == "eastmoney"
     assert len(no_push) == 1  # 仅 A 达 L2 推送，C 不推
     assert "兜底" not in no_push[0][1]  # 主源 eastmoney 不带兜底口径标注
     assert mon.states["BK1"]["fire_count"] == 1
+
+
+def test_scan_once_alert_includes_stock_detail(mon, monkeypatch, no_push):
+    # 需求一 #37：板块达 L2 推送时，消息须点出带动个股（涨停封板在前、未涨停领涨补齐）
+    monkeypatch.setattr(M, "em_boards",
+                        lambda kind: [bk("元件", "BK1", 3.0, 5, 2.0, up=80, down=10)]
+                        if kind == "concept" else [])
+    monkeypatch.setattr(M, "zt_pool", lambda d: [
+        {"code": "sz300919", "name": "中伟股份", "lianban": 3, "industry": "元件"},
+        {"code": "sh600183", "name": "生益科技", "lianban": 2, "industry": "元件"},
+        {"code": "sz002815", "name": "崇达技术", "lianban": 1, "industry": "元件"},
+        {"code": "sh600000", "name": "浦发银行", "lianban": 5, "industry": "银行"},
+    ])
+    monkeypatch.setattr(M, "build_sector_map", lambda d: {
+        "sh600183": ["industry:元件"],
+        "sh600584": ["industry:元件"],
+        "sz002463": ["industry:元件"],
+        "sh600000": ["industry:银行"],
+    })
+    monkeypatch.setattr(M, "tx_spot", lambda: pd.DataFrame([
+        {"code": "sh600584", "name": "长电科技", "zdf": 7.2},
+        {"code": "sz002463", "name": "沪电股份", "zdf": 6.5},
+        {"code": "sh600000", "name": "浦发银行", "zdf": 9.0},   # 非本板块，不得混入
+    ]))
+    assert mon.scan_once() == "eastmoney"
+    assert len(no_push) == 1
+    msg = no_push[0][1]
+    assert "封板：中伟股份(3连板)、生益科技(2连板)、崇达技术" in msg
+    assert "领涨：长电科技 +7.2%、沪电股份 +6.5%" in msg
+    assert "浦发银行" not in msg and "该板块共5只涨停" in msg
 
 
 def test_scan_once_all_sources_empty(mon, monkeypatch, no_push):
@@ -144,7 +175,7 @@ def test_board_wave_lifecycle(mon, no_push):
         # 用独立板块 BKW，避免与其它用例落盘的当日状态串扰
         mon._eval_board(bk(name="W", code="BKW", chg=chg, zt=zt, lb=lb,
                            speed=speed, up=up, down=down),
-                        {}, {}, 10, False, now, "eastmoney")
+                        [], {}, {}, 10, False, now, "eastmoney", {}, None, set())
 
     ev(2.6, 3, t0)                                   # R1 首次 L1
     ev(2.7, 3, t0 + timedelta(minutes=2), lb=1.6)    # R2 同波无台阶 -> 静默
@@ -197,6 +228,7 @@ def test_scan_once_zt_pool_none_treated_empty(mon, monkeypatch, no_push):
                         if kind == "concept" else [])
     monkeypatch.setattr(M, "zt_pool", lambda d: None)     # None 必须按空处理（杀 or -> and）
     monkeypatch.setattr(M, "build_sector_map", lambda d: {})
+    monkeypatch.setattr(M, "tx_spot", lambda: pd.DataFrame())
     assert mon.scan_once() == "eastmoney"
 
 
@@ -206,6 +238,7 @@ def test_scan_once_late_flag_boundary(mon, monkeypatch):
                         if kind == "concept" else [])
     monkeypatch.setattr(M, "zt_pool", lambda d: [])
     monkeypatch.setattr(M, "build_sector_map", lambda d: {})
+    monkeypatch.setattr(M, "tx_spot", lambda: pd.DataFrame())
     seen = {}
     monkeypatch.setattr(M.sm, "classify_signal",
                         lambda b, zi, zc, late: (seen.__setitem__("late", late), None)[1])

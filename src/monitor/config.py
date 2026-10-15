@@ -51,6 +51,8 @@ UP_RATIO    = _f("MON_UP_RATIO", 0.6)
 CONCENTRATION = _f("MON_CONC", 0.15)
 STEP_ZT       = int(_f("MON_STEP_ZT", 2))
 RELAPSE_GRACE_MIN = float(_f("MON_RELAPSE_GRACE_MIN", 10))
+LEADER_LIMIT = int(_f("MON_LEADER_LIMIT", 10))   # 板块推送附带个股明细的最多只数
+LEADER_UP_MIN = _f("MON_LEADER_UP_MIN", 3.0)     # 领涨股（未涨停）最低涨幅%，低于不算领涨
 THRESHOLD_SNAP = (f"chg>{CHG_L1}%|ztL1>={ZT_L1}|ztL2>={ZT_L2}|"
                   f"lb>={LB_L2}|speed>{SPEED_L1}/尾盘{SPEED_LATE}")
 POLL_NORMAL = int(_f("MON_POLL_NORMAL", 60))

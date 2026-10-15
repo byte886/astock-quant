@@ -12,6 +12,16 @@ from src.monitor import datasources as DS
 from src.monitor import config
 
 
+def _full_em_map(n_industries=220):
+    """构造一份"东财完整行业口径"映射（distinct 行业标签数 ≥ MIN_EM_INDUSTRY_TAGS）。"""
+    return {f"sh{600000 + i:06d}": [f"industry:行业{i}"] for i in range(n_industries)}
+
+
+def _sina_style_map(n=2989):
+    """构造一份"新浪退化口径"映射：行业标签只有几十个（粗行业），含行业股票却很多。"""
+    return {f"sz{1000 + i:06d}": [f"industry:新浪行业{i % 49}"] for i in range(n)}
+
+
 # ---------------- 东财 push2 ----------------
 def _em_json():
     return json.dumps({"data": {"diff": [
@@ -72,11 +82,11 @@ def test_sina_boards_ok_and_fail(fake_akshare):
 # ---------------- 板块成分映射 ----------------
 def test_build_sector_map_uses_cache(fake_akshare, monkeypatch):
     cache = config.WORKSPACE / "sector_map_20261012.json"
-    cache.write_text(json.dumps({"sh600001": ["industry:银行"]}), encoding="utf-8")
+    cache.write_text(json.dumps(_full_em_map()), encoding="utf-8")
     called = {"n": 0}
     fake_akshare.stock_board_industry_name_em = lambda: called.__setitem__("n", 1)
     out = DS.build_sector_map("20261012")
-    assert out == {"sh600001": ["industry:银行"]} and called["n"] == 0
+    assert out == _full_em_map() and called["n"] == 0
 
 
 def test_build_sector_map_em_full(fake_akshare):
@@ -105,6 +115,7 @@ def test_build_sector_map_falls_back_sina(fake_akshare, monkeypatch):
         {"label": ["new_abc"], "板块": ["元宇宙"]})
     fake_akshare.stock_sector_detail = lambda sector: pd.DataFrame(
         {"code": ["300001", "688001"]})
+    monkeypatch.setattr(DS, "_latest_complete_em_map", lambda d: None)
     out = DS.build_sector_map("20261014", background=False)
     assert "sz300001" in out and "sh688001" in out
 
@@ -248,6 +259,7 @@ def test_build_map_few_cons_still_falls_back_sina(fake_akshare, monkeypatch):
     fake_akshare.stock_board_concept_name_em = lambda: pd.DataFrame({"板块名称": []})
     fake_akshare.stock_board_industry_cons_em = lambda symbol: pd.DataFrame({"代码": ["600001"]})
     fake_akshare.stock_board_concept_cons_em = lambda symbol: pd.DataFrame({"代码": []})
+    monkeypatch.setattr(DS, "_latest_complete_em_map", lambda d: None)
     DS.build_sector_map("20261016", background=False)  # 仅 1 只 <100
     assert calls["n"] == 1                                 # ok=True 但成分不足仍兜底（杀 or -> and）
 
@@ -261,12 +273,12 @@ def _clear_maps():
 def test_build_map_today_cache_hits_without_spawn(monkeypatch):
     _clear_maps()
     (config.WORKSPACE / "sector_map_20261020.json").write_text(
-        json.dumps({"sh600001": ["industry:银行"]}), encoding="utf-8")
+        json.dumps(_full_em_map()), encoding="utf-8")
     spawned = []
     monkeypatch.setattr(DS, "_spawn_map_build",
                         lambda today: spawned.append(today) or True)
     out = DS.build_sector_map("20261020")
-    assert out == {"sh600001": ["industry:银行"]} and spawned == []  # 当日缓存命中不触发后台
+    assert out == _full_em_map() and spawned == []  # 当日东财完整缓存命中不触发后台
 
 
 def test_build_map_background_uses_stale_and_spawns(monkeypatch):
@@ -342,16 +354,22 @@ def test_spawn_map_build_uses_daemon_thread(monkeypatch):
     assert captured["name"] == "build-sector-map-20261101"
 
 
-def test_background_then_next_round_picks_up_today_cache(fake_akshare):
+def test_background_then_next_round_picks_up_today_cache(fake_akshare, monkeypatch):
     _clear_maps()
-    (config.WORKSPACE / "sector_map_20261012.json").write_text(
-        json.dumps({"sh600001": ["industry:旧"]}), encoding="utf-8")
-    fake_akshare.stock_board_industry_name_em = lambda: pd.DataFrame({"板块名称": ["银行"]})
+    monkeypatch.setattr(DS.time, "sleep", lambda s: None)
+    names = [f"行业{i}" for i in range(220)]   # 220 个东财细分行业，达完整口径
+
+    def _cons(symbol):
+        return pd.DataFrame({"代码": [f"{600000 + names.index(symbol):06d}"]})
+
+    fake_akshare.stock_board_industry_name_em = lambda: pd.DataFrame({"板块名称": names})
     fake_akshare.stock_board_concept_name_em = lambda: pd.DataFrame({"板块名称": []})
-    fake_akshare.stock_board_industry_cons_em = lambda symbol: pd.DataFrame({"代码": ["600001"]})
+    fake_akshare.stock_board_industry_cons_em = _cons
     fake_akshare.stock_board_concept_cons_em = lambda symbol: pd.DataFrame({"代码": []})
-    DS._build_and_cache_sector_map("20261013")          # 模拟后台线程已把当日映射建好
-    assert DS.build_sector_map("20261013") == {"sh600001": ["industry:银行"]}  # 下轮自动切当日
+    DS._build_and_cache_sector_map("20261013")          # 模拟后台线程已把当日东财完整映射建好
+    out = DS.build_sector_map("20261013")
+    assert DS._em_industry_complete(out)                # 达东财完整口径，下轮直接切当日
+    assert out["sh600000"] == ["industry:行业0"]
 
 
 # ---------- 板块映射行业维度完整性（I18 加固：行业是盘中主维度，不能因概念成功而静默缺失） ----------
@@ -428,3 +446,62 @@ def test_latest_stale_degrades_when_all_lack_industry():
     (config.WORKSPACE / "sector_map_20261012.json").write_text(
         json.dumps(concept_only), encoding="utf-8")
     assert DS._latest_stale_map("20261013") == concept_only   # 都缺行业也降级返回最近非空
+
+
+# ---------- 东财完整口径判定 + 限流时复用历史东财（2026-10-15 修复：新浪退化映射被误当合格缓存） ----------
+
+def test_em_industry_complete_discriminates_em_vs_sina():
+    assert DS._em_industry_complete(_full_em_map(220)) is True
+    assert DS._em_industry_complete(_full_em_map(200)) is True   # 恰 200 个细分行业标签达标
+    assert DS._em_industry_complete(_full_em_map(199)) is False  # 199 不达标（杀 >= -> >）
+    # 新浪粗行业：票再多（2989 只），行业标签只有 49 个，也不能算东财完整
+    assert DS._em_industry_complete(_sina_style_map()) is False
+    assert DS._em_industry_complete({}) is False
+    assert DS._em_industry_complete(None) is False
+
+
+def test_latest_complete_em_map_skips_today_and_degraded():
+    _clear_maps()
+    (config.WORKSPACE / "sector_map_20261010.json").write_text(
+        json.dumps(_full_em_map()), encoding="utf-8")        # 较旧但完整东财
+    (config.WORKSPACE / "sector_map_20261012.json").write_text(
+        json.dumps(_sina_style_map()), encoding="utf-8")     # 较新但新浪退化（不可用）
+    (config.WORKSPACE / "sector_map_20261013.json").write_text(
+        json.dumps(_full_em_map()), encoding="utf-8")        # 当日（必须排除）
+    hist = DS._latest_complete_em_map("20261013")
+    assert hist == _full_em_map()   # 排除当日后，跳过较新的退化版，回退到较旧的完整东财
+
+
+def test_build_map_em_blocked_reuses_history_em_not_sina(fake_akshare, monkeypatch):
+    _clear_maps()
+    (config.WORKSPACE / "sector_map_20261012.json").write_text(
+        json.dumps(_full_em_map()), encoding="utf-8")        # 历史东财完整映射
+
+    def _raise(*a, **k):
+        raise RuntimeError("em rate limited")
+
+    fake_akshare.stock_board_industry_name_em = _raise
+    fake_akshare.stock_board_concept_name_em = _raise
+    fake_akshare.stock_board_industry_cons_em = _raise
+    fake_akshare.stock_board_concept_cons_em = _raise
+    sina_calls = []
+    monkeypatch.setattr(DS, "_sina_sector_map", lambda: (sina_calls.append(1) or {}))
+    out = DS.build_sector_map("20261013", background=False)
+    assert sina_calls == []                    # 有完整东财历史时绝不退回新浪粗行业
+    assert DS._em_industry_complete(out)       # 行业口径仍是东财完整
+    assert out["sh600000"] == ["industry:行业0"]
+
+
+def test_build_sector_map_today_degraded_uses_history_em_and_spawns(monkeypatch):
+    _clear_maps()
+    (config.WORKSPACE / "sector_map_20261012.json").write_text(
+        json.dumps(_full_em_map()), encoding="utf-8")        # 历史东财完整
+    (config.WORKSPACE / "sector_map_20261013.json").write_text(
+        json.dumps(_sina_style_map()), encoding="utf-8")     # 当日缓存是新浪退化版
+    spawned = []
+    monkeypatch.setattr(DS, "_spawn_map_build",
+                        lambda today: spawned.append(today) or True)
+    out = DS.build_sector_map("20261013")
+    assert spawned == ["20261013"]               # 退化当日缓存触发后台重建
+    assert DS._em_industry_complete(out)         # 盘中立即用历史东财保住口径，不用退化版
+    assert out["sh600000"] == ["industry:行业0"]

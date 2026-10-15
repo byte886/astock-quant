@@ -6,7 +6,8 @@ import pytest
 
 from src.monitor.aggregator import (_is_zt_stock, tx_board_agg, _new_agg_bucket,
                                     _accumulate_price, _accumulate_volume,
-                                    _accumulate_tx_row, _boards_from_buckets)
+                                    _accumulate_tx_row, _boards_from_buckets,
+                                    board_stock_detail)
 
 
 # 无前缀 6 位码：startswith 能正确进入 20cm 分支（刻画函数本身的分支逻辑）
@@ -136,3 +137,103 @@ def test_accumulate_volume_valid_speed_added():
     a = _new_agg_bucket()
     _accumulate_volume(a, 1.0, 1.0)         # 有效 sp 必须累加（杀 delete not）
     assert a["speed_sum"] == 1.0
+
+
+# ---------------- 板块带动个股明细（涨停封板 + 未涨停领涨，需求一 #37） ----------------
+def _detail_zt():
+    """元件板块涨停池：中伟3板、生益2板（行业字段缺失，靠 mapping 反查）、崇达首板（重复一次）；另含一只银行票。"""
+    return [
+        {"code": "sz300919", "name": "中伟股份", "lianban": 3, "industry": "元件"},
+        {"code": "sh600183", "name": "生益科技", "lianban": 2, "industry": None},
+        {"code": "sz002815", "name": "崇达技术", "lianban": 1, "industry": "元件"},
+        {"code": "sz002815", "name": "崇达技术", "lianban": 1, "industry": "元件"},  # 重复，去重
+        {"code": "sh600000", "name": "浦发银行", "lianban": 5, "industry": "银行"},  # 非本板块
+    ]
+
+
+def _detail_mapping():
+    return {
+        "sh600183": ["industry:元件", "concept:PCB"],   # 行业字段缺失，靠它反查命中
+        "sh600584": ["industry:元件"],                   # 长电 +7.2
+        "sz002463": ["industry:元件"],                   # 沪电 +6.5（3号池，标⭐）
+        "sz002916": ["concept:PCB", "industry:元件"],   # 深南 +5.0（元件行业，也属 PCB 概念）
+        "sz002800": ["industry:元件"],                   # +2.0，不达 3% 门槛
+        "sh600000": ["industry:银行"],                   # +9.0 但非本板块
+    }
+
+
+def _detail_spot():
+    return pd.DataFrame([
+        {"code": "sh600584", "name": "长电科技", "zdf": 7.2},
+        {"code": "sz002463", "name": "沪电股份", "zdf": 6.5},
+        {"code": "sz002916", "name": "深南电路", "zdf": 5.0},
+        {"code": "sz002800", "name": "低涨股", "zdf": 2.0},
+        {"code": "sh600000", "name": "浦发银行", "zdf": 9.0},
+    ])
+
+
+_WATCH = {"sh600183", "sz002463"}
+
+
+def test_board_stock_detail_zt_order_leaders_star_dedup():
+    out = board_stock_detail("元件", _detail_zt(), _detail_mapping(),
+                             _detail_spot(), _WATCH)
+    codes = [s["code"] for s in out]
+    # 涨停按连板降序在前，领涨按涨幅降序补齐；银行票/低涨股不入；崇达去重
+    assert codes == ["sz300919", "sh600183", "sz002815",
+                     "sh600584", "sz002463", "sz002916"]
+    assert [s["is_zt"] for s in out] == [True, True, True, False, False, False]
+    assert [s["lianban"] for s in out if s["is_zt"]] == [3, 2, 1]
+    assert [s["zdf"] for s in out if not s["is_zt"]] == [7.2, 6.5, 5.0]
+    # 持仓/3号池标⭐：生益（涨停）、沪电（领涨）
+    stars = {s["code"] for s in out if s["star"]}
+    assert stars == {"sh600183", "sz002463"}
+    assert "sz002916" in codes and "sh600000" not in codes
+
+
+def test_board_stock_detail_concept_board_matches_via_mapping():
+    # 触发的是概念板块"PCB"：涨停池只有行业字段（=元件），需靠 mapping 的 concept:PCB 反查
+    zt = [
+        {"code": "sz002916", "name": "深南电路", "lianban": 2, "industry": "元件"},
+        {"code": "sz002815", "name": "崇达技术", "lianban": 1, "industry": "元件"},
+    ]
+    mapping = {
+        "sz002916": ["concept:PCB", "industry:元件"],   # 属 PCB 概念 -> 命中
+        "sz002815": ["industry:元件"],                   # 仅元件行业，不在 PCB 概念 -> 不命中
+    }
+    out = board_stock_detail("PCB", zt, mapping, pd.DataFrame(), set())
+    assert [s["code"] for s in out] == ["sz002916"]
+
+
+def test_board_stock_detail_total_capped_at_limit():
+    # 涨停 3 只，limit=4 -> 只补 1 只领涨（涨幅最高的长电），总数不超过 4
+    out = board_stock_detail("元件", _detail_zt(), _detail_mapping(),
+                             _detail_spot(), _WATCH, limit=4)
+    assert len(out) == 4
+    assert [s["code"] for s in out] == ["sz300919", "sh600183", "sz002815", "sh600584"]
+
+
+def test_board_stock_detail_up_min_threshold():
+    # 门槛抬到 6%：只有长电 7.2、沪电 6.5（>=6%），深南 5.0 被滤掉
+    out = board_stock_detail("元件", _detail_zt(), _detail_mapping(),
+                             _detail_spot(), _WATCH, up_min=6.0)
+    leaders = [s["code"] for s in out if not s["is_zt"]]
+    assert leaders == ["sh600584", "sz002463"]
+
+
+def test_board_stock_detail_spot_missing_or_empty_mapping_only_zt():
+    # 无快照：只给涨停，不抛错
+    out = board_stock_detail("元件", _detail_zt(), _detail_mapping(), None, set())
+    assert [s["code"] for s in out] == ["sz300919", "sh600183", "sz002815"]
+    # 映射为空：生益（行业字段缺失）无法反查被剔除，只剩行业字段直接命中的两只
+    out2 = board_stock_detail("元件", _detail_zt(), {}, _detail_spot(), set())
+    assert [s["code"] for s in out2] == ["sz300919", "sz002815"]
+    # 空 DataFrame 同样安全降级
+    out3 = board_stock_detail("元件", _detail_zt(), _detail_mapping(),
+                              pd.DataFrame(), set())
+    assert len(out3) == 3 and all(s["is_zt"] for s in out3)
+
+
+def test_board_stock_detail_empty_inputs():
+    assert board_stock_detail("元件", [], {}, None, set()) == []
+    assert board_stock_detail("元件", None, None, None, None) == []

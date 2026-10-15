@@ -411,3 +411,58 @@ def test_settle_and_close_missing_peak_defaults_zero():
     st2 = {"active": True, "lost_ts": now - timedelta(minutes=11), "wave": 1}
     sm.close_expired_grace(st2, now)
     assert st2["active"] is False and st2["prev_wave_peak_zt"] == 0  # 杀 close 的 get 默认 0 -> 1
+
+
+# ---------------- 板块带动个股明细文案（需求一 #37） ----------------
+def test_format_stock_name_variants():
+    assert sm.format_stock_name({"name": "崇达", "is_zt": True, "lianban": 1}) == "崇达"
+    assert sm.format_stock_name({"name": "中伟", "is_zt": True, "lianban": 3}) == "中伟(3连板)"
+    assert sm.format_stock_name({"name": "长电", "is_zt": False, "zdf": 7.2}) == "长电 +7.2%"
+    assert sm.format_stock_name({"name": "沪电", "is_zt": False, "zdf": 6.5,
+                                 "star": True}) == "沪电 +6.5%⭐"
+    assert sm.format_stock_name({"name": "生益", "is_zt": True, "lianban": 2,
+                                 "star": True}) == "生益(2连板)⭐"
+    assert sm.format_stock_name({"name": "无名", "is_zt": False, "zdf": None}) == "无名"
+
+
+def test_leaders_line_empty_and_zt_only():
+    assert sm.leaders_line([], 0) == ""
+    stocks = [
+        {"name": "中伟", "is_zt": True, "lianban": 3, "star": False},
+        {"name": "生益", "is_zt": True, "lianban": 2, "star": False},
+    ]
+    line = sm.leaders_line(stocks, total_zt=5)   # 板块共 5 只涨停，只展示 2 只
+    assert "封板：中伟(3连板)、生益(2连板)" in line
+    assert "等（该板块共5只涨停）" in line
+    assert "领涨：" not in line and "⭐" not in line
+
+
+def test_leaders_line_full_with_star_legend():
+    stocks = [
+        {"name": "中伟", "is_zt": True, "lianban": 3, "star": False},
+        {"name": "长电", "is_zt": False, "zdf": 7.2, "star": False},
+        {"name": "沪电", "is_zt": False, "zdf": 6.5, "star": True},
+    ]
+    line = sm.leaders_line(stocks, total_zt=1)
+    assert "封板：中伟(3连板)" in line
+    assert "领涨：长电 +7.2%、沪电 +6.5%⭐" in line
+    assert "⭐=持仓/3号池" in line
+    assert "等（" not in line   # 板块涨停全展示时不写"等"
+
+
+def test_build_alert_message_includes_stocks():
+    sig = sm.classify_signal(board(chg=3.0, zt=5, lb=2.0, up=80, down=10),
+                             {}, {}, False)
+    stocks = [
+        {"name": "中伟", "is_zt": True, "lianban": 3, "star": False},
+        {"name": "沪电", "is_zt": False, "zdf": 6.5, "star": True},
+    ]
+    _, msg = sm.build_alert_message(sig, 40, None, "L2", "首次启动", 1, None,
+                                    sm.empty_board_state(), NOW, [], "",
+                                    "eastmoney", stocks=stocks)
+    assert "封板：中伟(3连板)" in msg and "领涨：沪电 +6.5%⭐" in msg
+    assert "⭐=持仓/3号池" in msg
+    _, msg_no = sm.build_alert_message(sig, 40, None, "L2", "首次启动", 1, None,
+                                       sm.empty_board_state(), NOW, [], "",
+                                       "eastmoney")
+    assert "封板：" not in msg_no and "领涨：" not in msg_no

@@ -175,6 +175,24 @@ def _map_adequate(data):
     return bool(data) and _industry_count(data) >= MIN_INDUSTRY_COVERED
 
 
+# 东财完整行业是二级/三级细分（约 400+ 个 distinct 行业标签，如"元件/游戏Ⅱ/中药Ⅲ"）；
+# 新浪兜底只有约 49 个粗行业（电子信息/电子器件…）。用 distinct 行业标签数区分
+# "东财完整口径"与"新浪退化口径"，避免东财限流时把新浪粗行业误当合格映射。
+MIN_EM_INDUSTRY_TAGS = 200
+
+
+def _industry_tag_count(data):
+    """统计映射中 distinct 行业（industry:）标签数（东财细分数百、新浪粗分 49）。"""
+    return len({t for tags in (data or {}).values()
+                for t in (tags or [])
+                if isinstance(t, str) and t.startswith("industry:")})
+
+
+def _em_industry_complete(data):
+    """映射是否为"东财完整行业口径"：行业细分标签数达标（新浪粗分远达不到）。"""
+    return bool(data) and _industry_tag_count(data) >= MIN_EM_INDUSTRY_TAGS
+
+
 # 正在后台构建映射的日期集合（single-flight，防止多轮扫描重复起抓取线程）。
 _map_building = set()
 _map_build_lock = threading.Lock()
@@ -190,15 +208,25 @@ def _build_and_cache_sector_map(today):
         names = _em_board_names(kind)
         got[kind] = bool(names)
         _collect_em_cons(c2b, kind, fn, names)
-    # 行业是盘中主维度：行业板块名整体缺失，或成分总量过少，都追加新浪兜底。
-    # 概念维度为补充，且新浪概念口径与东财不一致，概念缺失不强制补（行业在即可盯盘）。
+    # 行业是盘中主维度：行业板块名整体缺失，或成分总量过少，都要补行业维度。
+    # 优先复用最近一份"东财完整行业口径"历史映射（板块成分变化极慢、跨日仍准确，
+    # 且能保住东财行业名，避免板块名/涨停池 industry/领涨股对不上）；没有完整历史
+    # 映射才退回新浪（新浪粗行业口径与东财不一致，仅作最后手段）。
     if not got.get("industry") or len(c2b) < 100:
-        log(f"[build_map] 东财行业板块缺失或成分不足（行业={got.get('industry')} "
-            f"概念={got.get('concept')} 股票={len(c2b)}），追加新浪板块成分兜底")
-        try:
-            c2b.update(_sina_sector_map())
-        except Exception as e:
-            log(f"[build_map] 新浪兜底失败：{type(e).__name__}")
+        hist = _latest_complete_em_map(today)
+        if hist:
+            log(f"[build_map] 东财行业成分不足（行业={got.get('industry')} "
+                f"概念={got.get('concept')} 股票={len(c2b)}），复用最近完整东财历史"
+                f"映射（行业标签 {_industry_tag_count(hist)}）保住东财口径")
+            for code, tags in hist.items():
+                c2b.setdefault(code, set()).update(tags)
+        else:
+            log(f"[build_map] 东财行业板块缺失或成分不足（行业={got.get('industry')} "
+                f"概念={got.get('concept')} 股票={len(c2b)}）且无完整历史映射，追加新浪兜底")
+            try:
+                c2b.update(_sina_sector_map())
+            except Exception as e:
+                log(f"[build_map] 新浪兜底失败：{type(e).__name__}")
     out = {k: sorted(v) for k, v in c2b.items()}
     cache = WORKSPACE / f"sector_map_{today}.json"
     cache.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
@@ -234,6 +262,23 @@ def _latest_stale_map(exclude_today):
     return fallback
 
 
+def _latest_complete_em_map(exclude_today):
+    """返回最近一份"东财完整行业口径"的历史映射（板块成分变化极慢，跨日仍可用），
+    无则 None。东财限流时用它保住行业口径，而不是退回新浪粗行业。"""
+    for path in reversed(sorted(WORKSPACE.glob("sector_map_*.json"))):
+        if path.name == f"sector_map_{exclude_today}.json":
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if _em_industry_complete(data):
+            log(f"[build_map] 命中最近完整东财历史映射 {path.name}"
+                f"（行业标签 {_industry_tag_count(data)}）")
+            return data
+    return None
+
+
 def _spawn_map_build(today):
     """single-flight 后台构建当日映射；已在构建则不重复起线程。"""
     with _map_build_lock:
@@ -264,10 +309,15 @@ def build_sector_map(today, background=True):
     if not background:
         return _build_and_cache_sector_map(today)
     cached = _cached_sector_map(today)
-    if cached is not None:
+    if cached is not None and _em_industry_complete(cached):
         return cached
+    # 当日缓存缺失，或只是新浪退化口径（东财限流时盘前会写成这种）：后台重建，
+    # 本函数先用最近完整东财历史映射保住行业口径，避免板块名/领涨股对不上。
+    if cached is not None:
+        log(f"[build_map] 当日缓存行业口径退化（行业标签 {_industry_tag_count(cached)}），"
+            f"改用最近完整东财历史映射并后台重建当日映射")
     _spawn_map_build(today)
-    return _latest_stale_map(today) or {}
+    return _latest_complete_em_map(today) or _latest_stale_map(today) or {}
 
 
 # ---------------- 交易日历 ----------------

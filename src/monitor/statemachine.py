@@ -231,6 +231,37 @@ def metrics_line(sig, n_zt, hold_tags):
     return line
 
 
+def format_stock_name(s):
+    """个股名单里单只票的短写法：涨停标连板、领涨标涨幅，关注标的加 ⭐。"""
+    star = "⭐" if s.get("star") else ""
+    if s["is_zt"]:
+        lb = s.get("lianban") or 1
+        tag = f"({lb}连板)" if lb >= 2 else ""
+        return f"{s['name']}{tag}{star}"
+    zdf = s.get("zdf")
+    zdf_txt = f" {zdf:+.1f}%" if zdf is not None else ""
+    return f"{s['name']}{zdf_txt}{star}"
+
+
+def leaders_line(stocks, total_zt):
+    """个股明细行：点出是哪几只票带动板块（涨停封板在前，未涨停领涨补齐）。"""
+    if not stocks:
+        return ""
+    zt_shown = [s for s in stocks if s["is_zt"]]
+    up_shown = [s for s in stocks if not s["is_zt"]]
+    lines = []
+    if zt_shown:
+        names = "、".join(format_stock_name(s) for s in zt_shown)
+        more = (f" 等（该板块共{total_zt}只涨停）"
+                if total_zt and total_zt > len(zt_shown) else "")
+        lines.append(f"封板：{names}{more}")
+    if up_shown:
+        lines.append("领涨：" + "、".join(format_stock_name(s) for s in up_shown))
+    if any(s.get("star") for s in stocks):
+        lines.append("⭐=持仓/3号池")
+    return "\n" + "\n".join(lines)
+
+
 def source_caveat(source):
     """非主源兜底时给一行口径提示；主源 eastmoney 返回空串。
 
@@ -248,7 +279,7 @@ def source_caveat(source):
 
 def build_alert_message(sig, n_zt, conc_ratio, level, stage_tag,
                         fire_no, relaunch_gap, st, now, hold_tags, hint_line,
-                        source):
+                        source, stocks=None):
     """组装推送标题与正文（纯函数；持仓标签与未配置提示由 monitor 传入）。"""
     delta_line = format_deltas(st, sig)
     reasons = format_reasons(sig)
@@ -260,6 +291,7 @@ def build_alert_message(sig, n_zt, conc_ratio, level, stage_tag,
            + (delta_line + "\n" if delta_line else "")
            + f"触发：{' ＋ '.join(reasons)}\n"
            + metrics_line(sig, n_zt, hold_tags)
+           + leaders_line(stocks or [], sig["zt"])
            + source_caveat(source)
            + conc_line + hint_line)
     title = f"{'🔴' if level == 'L2' else '🟠'} {sig['name']} · {stage_tag}"
