@@ -11,7 +11,7 @@ from .config import (POLL_NORMAL, POLL_LATE, POLL_CLOSED, HB_STALL_SEC,
                      CHG_L1, ZT_L1, ZT_L2, log)
 from .monitor import Monitor
 from .notifier import push
-from .datasources import is_trading_time, build_sector_map
+from .datasources import is_trading_time, build_sector_map, current_session_start
 from .persistence import (single_instance, load_last_scan, save_last_scan)
 
 
@@ -33,10 +33,17 @@ def _mark_down(st, title, msg, now):
 
 
 def _watchdog(st, now):
-    """交易时段连续 HB_STALL_SEC 秒没有一次成功扫描 -> 心跳告警；同次宕机按阈值冷却。"""
-    if not is_trading_time(now):
+    """交易时段连续 HB_STALL_SEC 秒没有一次成功扫描 -> 心跳告警；同次宕机按阈值冷却。
+
+    静默基准取「上次成功扫描」与「当前交易时段开盘」中较晚者，
+    从而把午休（11:30–13:00）、隔夜、节假日的休市停扫排除在静默之外，
+    避免开盘瞬间把上一时段的旧时间戳误判成宕机（I22）。
+    """
+    sess_start = current_session_start(now)
+    if sess_start is None:
         return
-    stall = (now - st.last_success).total_seconds()
+    baseline = max(st.last_success, sess_start)
+    stall = (now - baseline).total_seconds()
     if stall >= HB_STALL_SEC and (st.last_hb is None
                                   or (now - st.last_hb).total_seconds() >= HB_STALL_SEC):
         _mark_down(st, "⚠️ 盘中监控心跳告警",

@@ -342,13 +342,43 @@ def load_trade_dates():
         return None
 
 
-def is_trading_time(now=None):
-    """判断给定时刻是否处于 A 股连续竞价时段（含节假日历，失败降级仅按周末）。"""
-    now = now or datetime.now()
+# 连续竞价时段（标准时段；半日制等特殊安排不单独处理）
+_MORNING_OPEN, _MORNING_CLOSE = dtime(9, 30), dtime(11, 30)
+_AFTERNOON_OPEN, _AFTERNOON_CLOSE = dtime(13, 0), dtime(15, 0)
+
+
+def _is_trading_day(now):
+    """给定日期是否为交易日（周末硬休市；节假日历拉取失败时降级仅按周末）。"""
     if now.weekday() >= 5:
         return False
     cal = load_trade_dates()
     if cal is not None and now.strftime("%Y-%m-%d") not in cal:
         return False
+    return True
+
+
+def is_trading_time(now=None):
+    """判断给定时刻是否处于 A 股连续竞价时段（含节假日历，失败降级仅按周末）。"""
+    now = now or datetime.now()
+    if not _is_trading_day(now):
+        return False
     t = now.time()
-    return (dtime(9, 30) <= t <= dtime(11, 30)) or (dtime(13, 0) <= t <= dtime(15, 0))
+    return ((_MORNING_OPEN <= t <= _MORNING_CLOSE)
+            or (_AFTERNOON_OPEN <= t <= _AFTERNOON_CLOSE))
+
+
+def current_session_start(now=None):
+    """返回当前连续竞价时段的开盘时刻（上午 9:30 / 下午 13:00）；非交易时段返回 None。
+
+    心跳看门狗用它把午休（11:30–13:00）、隔夜、节假日的休市停扫排除在
+    "连续无成功扫描"静默之外，避免每个交易日开盘后误报心跳告警（I22）。
+    """
+    now = now or datetime.now()
+    if not _is_trading_day(now):
+        return None
+    t = now.time()
+    if _MORNING_OPEN <= t <= _MORNING_CLOSE:
+        return now.replace(hour=9, minute=30, second=0, microsecond=0)
+    if _AFTERNOON_OPEN <= t <= _AFTERNOON_CLOSE:
+        return now.replace(hour=13, minute=0, second=0, microsecond=0)
+    return None

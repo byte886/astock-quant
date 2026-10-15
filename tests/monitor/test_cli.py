@@ -31,14 +31,15 @@ def test_parse_last_success():
 
 # ---------------- 看门狗 ----------------
 def test_watchdog_silent_when_closed(monkeypatch, no_push):
-    monkeypatch.setattr(cli, "is_trading_time", lambda now: False)
+    monkeypatch.setattr(cli, "current_session_start", lambda now: None)
     st = cli._RunState(datetime.now() - timedelta(hours=2))
     cli._watchdog(st, datetime.now())
     assert no_push == []
 
 
 def test_watchdog_alerts_then_cooldown(monkeypatch, no_push):
-    monkeypatch.setattr(cli, "is_trading_time", lambda now: True)
+    monkeypatch.setattr(cli, "current_session_start",
+                        lambda now: datetime(2026, 10, 12, 9, 30))
     now = datetime(2026, 10, 12, 10, 31)
     st = cli._RunState(now - timedelta(seconds=HB_STALL_SEC + 60))
     cli._watchdog(st, now)
@@ -49,10 +50,41 @@ def test_watchdog_alerts_then_cooldown(monkeypatch, no_push):
 
 
 def test_watchdog_no_alert_within_stall(monkeypatch, no_push):
-    monkeypatch.setattr(cli, "is_trading_time", lambda now: True)
+    monkeypatch.setattr(cli, "current_session_start",
+                        lambda now: now.replace(hour=9, minute=30, second=0, microsecond=0))
     st = cli._RunState(datetime.now())
     cli._watchdog(st, datetime.now())
     assert no_push == []
+
+
+def test_watchdog_lunch_break_not_alert(monkeypatch, no_push):
+    """I22：午休后下午开盘，末次成功扫描在 11:29，开盘 1 分钟内不应误报（休市不计静默）。"""
+    monkeypatch.setattr(cli, "current_session_start",
+                        lambda now: now.replace(hour=13, minute=0, second=0, microsecond=0))
+    now = datetime(2026, 10, 12, 13, 1)
+    st = cli._RunState(datetime(2026, 10, 12, 11, 29, 55))
+    cli._watchdog(st, now)
+    assert no_push == [] and st.down_alerted is False
+
+
+def test_watchdog_afternoon_real_still_alerts(monkeypatch, no_push):
+    """下午开盘后真的连续 30 分钟扫不出数据（last_success 仍停在上午），仍须告警。"""
+    monkeypatch.setattr(cli, "current_session_start",
+                        lambda now: now.replace(hour=13, minute=0, second=0, microsecond=0))
+    now = datetime(2026, 10, 12, 13, 35)
+    st = cli._RunState(datetime(2026, 10, 12, 11, 29, 55))
+    cli._watchdog(st, now)
+    assert len(no_push) == 1 and st.down_alerted is True
+
+
+def test_watchdog_overnight_open_not_alert(monkeypatch, no_push):
+    """隔夜后上午开盘，末次成功扫描在前一交易日 15:00，开盘 1 分钟内不应误报。"""
+    monkeypatch.setattr(cli, "current_session_start",
+                        lambda now: now.replace(hour=9, minute=30, second=0, microsecond=0))
+    now = datetime(2026, 10, 12, 9, 31)
+    st = cli._RunState(datetime(2026, 10, 9, 15, 0))
+    cli._watchdog(st, now)
+    assert no_push == [] and st.down_alerted is False
 
 
 # ---------------- 单轮轮询 ----------------
@@ -176,7 +208,8 @@ def test_runstate_initial_flags():
 
 
 def test_watchdog_stall_exact_boundary(monkeypatch, no_push):
-    monkeypatch.setattr(cli, "is_trading_time", lambda now: True)
+    monkeypatch.setattr(cli, "current_session_start",
+                        lambda now: datetime(2026, 10, 12, 9, 30))
     now = datetime(2026, 10, 12, 10, 30)
     st_eq = cli._RunState(now - timedelta(seconds=HB_STALL_SEC))   # 恰 1800s
     cli._watchdog(st_eq, now)

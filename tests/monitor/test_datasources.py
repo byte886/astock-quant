@@ -241,6 +241,34 @@ def test_is_trading_time_weekend_hard_rule_and_boundaries(monkeypatch):
     assert DS.is_trading_time(t(15, 1)) is False
 
 
+def test_current_session_start(monkeypatch):
+    monkeypatch.setattr(DS, "load_trade_dates", lambda: None)     # 日历降级仅按周末
+
+    def t(h, m):
+        return datetime(2026, 10, 12, h, m)                       # 周一
+    # 上午盘 -> 当日 9:30；下午盘 -> 当日 13:00（含边界）
+    assert DS.current_session_start(t(9, 30)) == datetime(2026, 10, 12, 9, 30)
+    assert DS.current_session_start(t(11, 0)) == datetime(2026, 10, 12, 9, 30)
+    assert DS.current_session_start(t(11, 30)) == datetime(2026, 10, 12, 9, 30)
+    assert DS.current_session_start(t(13, 0)) == datetime(2026, 10, 12, 13, 0)
+    assert DS.current_session_start(t(14, 30)) == datetime(2026, 10, 12, 13, 0)
+    assert DS.current_session_start(t(15, 0)) == datetime(2026, 10, 12, 13, 0)
+    # 开盘前 / 午休 / 收盘后 -> None
+    assert DS.current_session_start(t(9, 29)) is None
+    assert DS.current_session_start(t(11, 31)) is None
+    assert DS.current_session_start(t(12, 0)) is None
+    assert DS.current_session_start(t(15, 1)) is None
+    # 周末 -> None
+    assert DS.current_session_start(datetime(2026, 10, 10, 10, 0)) is None
+
+
+def test_current_session_start_respects_holiday_calendar(monkeypatch):
+    # 日历明确非交易日（如国庆），即使工作日且落在时段内也返回 None
+    monkeypatch.setattr(DS, "load_trade_dates", lambda: {"2026-10-12"})
+    assert DS.current_session_start(datetime(2026, 10, 1, 10, 0)) is None
+    assert DS.current_session_start(datetime(2026, 10, 12, 10, 0)) == datetime(2026, 10, 12, 9, 30)
+
+
 def test_sina_collect_skips_row_without_board_name(fake_akshare):
     # 空串板块名（falsy；注意 pandas 的 None 会变 NaN 而 NaN 为 truthy，空串才走跳过分支）
     fake_akshare.stock_sector_spot = lambda indicator: pd.DataFrame(
