@@ -164,3 +164,65 @@ def month_end_dates(dates, start="2015-01-01"):
     grp = s.groupby([dates.year, dates.month]).max()
     me = pd.DatetimeIndex(grp.values)
     return me[me >= pd.Timestamp(start)]
+
+
+# ── 交易日历（用于准确判定月末，避免数据末日被误判为月末）──────────────────
+CAL_CACHE = WORKSPACE / "trade_calendar.csv"
+
+
+def load_trade_calendar(min_days_ahead=30):
+    """A 股交易日历（含交易所预公布的未来交易日），返回 DatetimeIndex。
+
+    优先读本地缓存 data/_workspace/trade_calendar.csv；缓存覆盖不足
+    （最大日期距今不足 min_days_ahead 天）时从 akshare 刷新并落盘。
+    akshare 拉取失败则回退到现有缓存（即使偏旧），再失败返回 None。
+    交易日历由交易所年初公布全年休市安排，可确定性地判定"某月最后交易日"，
+    不依赖"面板下一交易日是否跨月"——后者在数据面板最后一天（数据截断）会
+    把非月末日误判为月末（例如 10-15 后还有 10-30，却被当成 10 月末）。
+    """
+    def _read_cache():
+        if CAL_CACHE.exists():
+            try:
+                cal = pd.to_datetime(pd.read_csv(CAL_CACHE)["trade_date"])
+                if len(cal):
+                    return pd.DatetimeIndex(cal).sort_values().unique()
+            except Exception:
+                return None
+        return None
+
+    cal = _read_cache()
+    cutoff = pd.Timestamp.now() + pd.Timedelta(days=min_days_ahead)
+    if cal is not None and cal.max() >= cutoff:
+        return cal
+    try:
+        import akshare as ak
+        raw = ak.tool_trade_date_hist_sina()
+        dates = pd.to_datetime(raw["trade_date"]).sort_values()
+        WORKSPACE.mkdir(parents=True, exist_ok=True)
+        dates.to_frame(name="trade_date").to_csv(CAL_CACHE, index=False)
+        return pd.DatetimeIndex(dates).unique()
+    except Exception:
+        return cal  # 偏旧缓存（可能为 None）；由调用方决定是否回退
+
+
+def is_month_end_trade_date(d, cal=None, all_dates=None):
+    """判断 d 是否当月最后一个 A 股交易日（确定性，含国庆/春节边界）。
+
+    - 优先用含未来交易日的真实日历 cal：d 等于该月日历中最后一个交易日即月末。
+    - 无日历（None）时回退：all_dates 中 d 的下一交易日跨月，则 d 为月末。
+    - d 是面板最后一天（数据截断、无下一交易日）且无日历时，保守返回 False：
+      宁可月末信号晚一天，也不在非月末（如 10-15）发出假信号、导致次日误换仓。
+    """
+    d = pd.Timestamp(d)
+    if cal is not None and len(cal):
+        same_month = [t for t in cal if t.year == d.year and t.month == d.month]
+        if same_month:
+            return d == max(same_month)
+        return False
+    if all_dates is not None:
+        dates = list(all_dates)
+        if d in dates:
+            idx = dates.index(d)
+            if idx + 1 < len(dates):
+                return d.month != dates[idx + 1].month
+    return False

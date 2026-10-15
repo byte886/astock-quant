@@ -22,6 +22,9 @@ INITIAL_CASH = 1_000_000.0
 COMMISSION = 0.00025
 STAMP_TAX = 0.001
 SLIPPAGE = 0.001
+LOT_SHARES = 100  # A 股买入最小单位：1 手 = 100 股
+SELL_RATE = COMMISSION + STAMP_TAX + SLIPPAGE   # 卖出费率：佣金+印花税+滑点
+BUY_RATE = COMMISSION + SLIPPAGE                # 买入费率：佣金+滑点（买入无印花税）
 
 
 class PaperAccount:
@@ -55,41 +58,81 @@ class PaperAccount:
         return self.state["cash"] + self.market_value(close_row)
 
     # ---------- 执行 pending（次日开盘价成交） ----------
+    def _liquidate(self, open_row):
+        """卖出可成交的旧仓。
+
+        开盘价取不到（停牌/无数据）的持仓保留、不卖出；返回
+        (卖出净回款, 保留持仓)。卖出净回款 = 卖出额 − 卖出费，只在
+        这里扣一次卖出费（历史上曾在买入后又扣一次，导致现金虚减透支）。
+        """
+        carried = dict(self.state["holdings"])
+        proceeds = 0.0
+        sell_cost = 0.0
+        for code, sh in list(self.state["holdings"].items()):
+            px = open_row.get(code, np.nan)
+            if not np.isfinite(px) or px <= 0:
+                continue  # 停牌/无价：保留旧仓，不参与本轮调仓
+            value = sh * px
+            proceeds += value
+            sell_cost += value * SELL_RATE
+            carried.pop(code, None)
+        net_proceeds = self.state["cash"] + proceeds - sell_cost
+        return net_proceeds, carried
+
+    @staticmethod
+    def _lot_shares(price, budget):
+        """预算内能买的整手股数（100 股一手，向下取整）。"""
+        return int(budget / price / LOT_SHARES) * LOT_SHARES
+
+    def _buy(self, target, open_row, available):
+        """按等权预算买入新目标，返回 (新持仓, 期末现金)。
+
+        每只成交额预算 = 可用现金 / 只数 / (1 + 买入费率)，已预留买入佣金+
+        滑点；再按 100 股整手向下取整，故"成交额+买入费"必不超过该只预算，
+        全部买入后期末现金必然 ≥ 0（不允许透支）。
+        """
+        budget_each = available / len(target) / (1 + BUY_RATE)
+        new_holdings = {}
+        buy_value = 0.0
+        for code in target:
+            px = open_row.get(code, np.nan)
+            if not np.isfinite(px) or px <= 0:
+                continue  # 停牌/涨停买不到：跳过，不占用预算
+            sh = self._lot_shares(px, budget_each)
+            if sh <= 0:
+                continue
+            new_holdings[code] = sh
+            buy_value += sh * px
+        cash = available - buy_value - buy_value * BUY_RATE
+        return new_holdings, cash
+
     def execute_pending(self, open_row, preclose_row=None, tradestatus_row=None, isst_row=None):
         target = self.state["pending_target"]
         if not target:
             return []
-        # 1) 全卖旧仓，回收现金（扣卖出成本：佣金+印花税+滑点）
-        proceeds, cost = 0.0, 0.0
-        for code, sh in self.state["holdings"].items():
-            px = open_row.get(code, np.nan)
-            if not np.isfinite(px) or px <= 0:
-                continue
-            v = sh * px
-            proceeds += v
-            cost += v * (COMMISSION + STAMP_TAX + SLIPPAGE)
-        available = self.state["cash"] + proceeds - cost
-        # 2) 按新目标等权买入（扣买入成本：佣金+滑点）
-        if available <= 0 or not target:
+        # 1) 卖出可成交旧仓（停牌保留），得到可用现金（卖出费仅在此处扣一次）
+        available, carried = self._liquidate(open_row)
+        if available <= 0:
+            # 无可用现金：保留已卖出的净回款与停牌旧仓，不再买入
+            self.state["cash"] = available
+            self.state["holdings"] = carried
+            self._clear_pending()
             return []
-        # 每只预算预留买入佣金+滑点，避免满仓买入后现金小幅为负
-        budget_each = available / len(target) / (1 + COMMISSION + SLIPPAGE)
-        new_holdings, buy_val = {}, 0.0
-        for code in target:
-            px = open_row.get(code, np.nan)
-            if not np.isfinite(px) or px <= 0:
-                continue
-            sh = int(budget_each / px)  # 整手按股（向下取整再留余量）
-            if sh <= 0:
-                continue
-            new_holdings[code] = sh
-            buy_val += sh * px
-        cost += buy_val * (COMMISSION + SLIPPAGE)
-        self.state["cash"] = available - buy_val - cost
+        # 2) 等权买入新目标（预算预留买入费、整手向下）
+        bought, cash = self._buy(target, open_row, available)
+        # 现金硬约束：预算+整手向下本应保证 ≥0，若仍为负即逻辑错误，宁报错不透支
+        if cash < -0.01:
+            raise RuntimeError(f"模拟盘买入后现金为负 {cash:.2f}，违反不透支约束")
+        new_holdings = dict(carried)
+        new_holdings.update(bought)
+        self.state["cash"] = cash
         self.state["holdings"] = new_holdings
+        self._clear_pending()
+        return list(bought.keys())
+
+    def _clear_pending(self):
         self.state["pending_target"] = []
         self.state["pending_signal_date"] = None
-        return list(new_holdings.keys())
 
     # ---------- 月末生成新信号 ----------
     def set_pending(self, target, signal_date):

@@ -1,13 +1,14 @@
-# 盘中监控包（src/monitor）的确定性质量门配置 —— clean-code-gauntlet
-# 仅把监控包测试纳入本门；既有 tests/test_paper_trading_daily.py 仍按其文件头直接 python 运行。
+# 确定性质量门配置 —— clean-code-gauntlet
+# 默认测试集：外脑监控包 tests/monitor + 量子系统执行层 tests/execution。
+# 覆盖率门覆盖 src/monitor 与 src/execution；两者均为 100%/高覆盖、变异 0 存活。
 
 [tool.pytest.ini_options]
-testpaths = ["tests/monitor"]
+testpaths = ["tests/monitor", "tests/execution", "tests/quant"]
 pythonpath = ["."]
 addopts = "-q"
 
 [tool.coverage.run]
-source = ["src/monitor"]
+source = ["src/monitor", "src/execution"]
 branch = true
 
 [tool.coverage.report]
