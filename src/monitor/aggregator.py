@@ -91,17 +91,45 @@ def tx_board_agg(mapping, tx_df):
         tx_df = tx_df.copy()
         for col in ("zdf", "lb", "speed"):
             tx_df[col] = pd.to_numeric(tx_df[col], errors="coerce")
+        drop_levels = _redundant_level_tags(mapping)
         board_agg = {}
         for _, row in tx_df.iterrows():
             code = row["code"]
             tags = mapping.get(code)
             if not tags:
                 continue
+            if drop_levels:
+                tags = [t for t in tags
+                        if not (t.startswith("industry:")
+                                and t.partition(":")[2] in drop_levels)]
             _accumulate_tx_row(board_agg, code, tags, row)
         return _boards_from_buckets(board_agg)
     except Exception as e:
         log(f"[tx_agg] 聚合失败：{type(e).__name__}")
         return None
+
+
+def _redundant_level_tags(mapping):
+    """成分完全相同的二级（XⅡ）/三级（XⅢ）行业对，返回应丢弃的三级标签名集合。
+
+    东财行业分一级（如"传媒"）、二级（如"游戏Ⅱ"）、三级（如"游戏Ⅲ"）。当一个二级
+    行业下只有一个三级行业时，二者成分股票集合完全相同，腾讯聚合会算出两个一模一样的
+    板块、同一批股票重复推送（如"林业Ⅱ"与"林业Ⅲ"同 4 只、同秒各推一条）。此时保留
+    二级 XⅡ（与东财涨停池 industry 命名一致，如"游戏Ⅱ/证券Ⅱ"），丢弃三级 XⅢ。
+    成分不同的 Ⅱ/Ⅲ（一个二级下有多个三级细分）全部保留，不误删。
+    """
+    members = {}
+    for code, tags in (mapping or {}).items():
+        for t in tags or []:
+            if t.startswith("industry:"):
+                members.setdefault(t.partition(":")[2], set()).add(code)
+    drop = set()
+    for name, codes in members.items():
+        if name.endswith("Ⅲ") and codes:
+            lvl2 = name[:-1] + "Ⅱ"
+            if members.get(lvl2) == codes:
+                drop.add(name)
+    return drop
 
 
 def _belongs_to_board(tags, board_name):

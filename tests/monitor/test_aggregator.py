@@ -7,7 +7,7 @@ import pytest
 from src.monitor.aggregator import (_is_zt_stock, tx_board_agg, _new_agg_bucket,
                                     _accumulate_price, _accumulate_volume,
                                     _accumulate_tx_row, _boards_from_buckets,
-                                    board_stock_detail)
+                                    _redundant_level_tags, board_stock_detail)
 
 
 # 无前缀 6 位码：startswith 能正确进入 20cm 分支（刻画函数本身的分支逻辑）
@@ -97,6 +97,53 @@ def test_tx_board_agg_values():
 def test_tx_board_agg_skips_unmapped():
     df = pd.DataFrame([{"code": "sz999999", "zdf": 5.0, "lb": 1.0, "speed": 1.0}])
     assert tx_board_agg(_mapping(), df) is None
+
+
+# ---------------- 东财二级/三级行业（XⅡ/XⅢ）层级去重 ----------------
+def test_redundant_level_tags_drops_identical_iii():
+    # 林业Ⅱ 与 林业Ⅲ 成分完全相同 -> 丢弃三级"林业Ⅲ"，保留二级"林业Ⅱ"
+    mapping = {
+        "sh600001": ["industry:林业Ⅱ", "industry:林业Ⅲ"],
+        "sh600002": ["industry:林业Ⅱ", "industry:林业Ⅲ"],
+    }
+    assert _redundant_level_tags(mapping) == {"林业Ⅲ"}
+
+
+def test_redundant_level_tags_keeps_distinct_ii_iii():
+    # 一个二级下有多个三级、成分不同（Ⅱ为并集，Ⅲ为子集）-> 都保留，不误删
+    mapping = {
+        "sh600001": ["industry:传媒", "industry:游戏Ⅱ", "industry:游戏Ⅲ"],
+        "sh600002": ["industry:传媒", "industry:游戏Ⅱ", "industry:影视Ⅲ"],
+    }
+    assert _redundant_level_tags(mapping) == set()
+
+
+def test_tx_board_agg_dedupes_identical_level():
+    # 同一批票同时挂 Ⅱ/Ⅲ：聚合只产出一个二级板块，不重复
+    mapping = {
+        "sh600001": ["industry:林业Ⅱ", "industry:林业Ⅲ"],
+        "sh600002": ["industry:林业Ⅱ", "industry:林业Ⅲ"],
+    }
+    df = pd.DataFrame([
+        {"code": "sh600001", "zdf": 3.0, "lb": 2.0, "speed": 1.6},
+        {"code": "sh600002", "zdf": 1.0, "lb": 1.0, "speed": 1.4},
+    ])
+    names = {b["name"] for b in tx_board_agg(mapping, df)}
+    assert "林业Ⅱ" in names and "林业Ⅲ" not in names
+
+
+def test_tx_board_agg_keeps_distinct_level_and_concept():
+    # 成分不同的 Ⅱ/Ⅲ 与概念标签都保留
+    mapping = {
+        "sh600001": ["industry:游戏Ⅱ", "industry:游戏Ⅲ", "concept:AI"],
+        "sh600002": ["industry:游戏Ⅱ", "industry:影视Ⅲ"],
+    }
+    df = pd.DataFrame([
+        {"code": "sh600001", "zdf": 3.0, "lb": 2.0, "speed": 1.6},
+        {"code": "sh600002", "zdf": 1.0, "lb": 1.0, "speed": 1.4},
+    ])
+    names = {b["name"] for b in tx_board_agg(mapping, df)}
+    assert {"游戏Ⅱ", "游戏Ⅲ", "影视Ⅲ", "AI"} <= names
 
 
 def test_bucket_helpers():
