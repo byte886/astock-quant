@@ -35,6 +35,45 @@ def append_alert(row):
         w.writerow(row)
 
 
+def _higher_level(current, level_text):
+    """把一条预警级别并入当前最高级别：L2 优先，其次 L1，其余维持。"""
+    if "L2" in level_text:
+        return "L2"
+    if "L1" in level_text and current != "L2":
+        return "L1"
+    return current
+
+
+def _accumulate_fired(out, name, level_text):
+    """把一条预警按板块名累加到 {板块名: {count, level}}；空板块名忽略。"""
+    if not name:
+        return
+    e = out.setdefault(name, {"count": 0, "level": "L1"})
+    e["count"] += 1
+    e["level"] = _higher_level(e["level"], level_text)
+
+
+def load_fired_boards(day=None):
+    """读当日预警台账，返回 {板块名: {"count": 今日推送次数, "level": 最高级别}}。
+
+    持仓盯盘用它判断"某持仓所属板块今日是否真的推送过异动"，依据是真实推送记录而非
+    实时推断；无台账（如盘前/当日无触发）返回 {}。
+    """
+    day = day or datetime.now().strftime("%Y-%m-%d")
+    p = ALERT_DIR / f"{day}.csv"
+    if not p.exists():
+        return {}
+    out = {}
+    try:
+        with open(p, encoding="utf-8-sig", newline="") as f:
+            for row in csv.DictReader(f):
+                _accumulate_fired(out, (row.get("板块名") or "").strip(),
+                                  (row.get("级别") or "").strip())
+    except Exception:
+        pass
+    return out
+
+
 def save_snapshot(now, boards, source):
     """把本轮全板块指标追加到当日快照 CSV；只用于事后复盘，失败仅记日志。"""
     if not boards:

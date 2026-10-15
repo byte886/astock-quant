@@ -12,12 +12,14 @@
 | `com.astock-quant.incremental-worker` | 常驻 KeepAlive | 全天，盘后 15:05 起补数 | 量子：每日行情增量（核心池+全市场日线+分钟线滚动） | 长期 |
 | `com.astock-quant.daily-after-close` | 定时 | 周一至周五 18:30 | 量子：收盘后推进模拟盘（run_paper_trading） | 长期 |
 | `com.astock-quant.build-sector-map` | 定时 | 周一至周五 09:13 | 外脑：盘前预建当日板块成分映射（本目录模板） | 长期 |
+| `com.astock-quant.holdings-check` | 定时·跑完即退 | 周一至周五 09:45 / 13:05 | 外脑：持仓盯盘快照推送（现价/涨跌幅/量比/涨速、涨跌停/大跌标注、3号池⭐、所属板块异动，需求二 #38，本目录模板） | 长期 |
 | `com.astock-quant.download-data` | 保活·一次性 | 历史下载完成即退出 | 量子：全市场历史行情下载（断点续传） | **已停用归档**（个股日线/5分钟 4888/4888、ETF 日线/5分钟 1588/1588 全 100%、0 失败） |
 | `com.astock-quant.download-monitor` | 保活·一次性 | 每 15 分钟巡检 | download-data 的看门狗 | **已停用归档**（随上者） |
 | `com.astock-quant.fundamentals` | 保活·一次性 | 基本面下载完成即退出 | 量子：中证800 基本面（ROE/成长/分红） | **已停用归档**（707/约800≈88%、无失败；将来跑月度多因子前需续跑 `scripts/download_fundamentals.py` 补约 93 只） |
 | `com.astock-quant.open-check` | 定时（写死 2026-09-28） | 一次性 | 9-28 开盘检查 | **已退役归档**，被 build-sector-map 替换 |
 
-> 长期常驻 4 个（上表前四行）。2026-10-13 已将三个一次性下载任务与 open-check `bootout` 停用，plist 归档在
+> 长期任务 5 个：常驻 KeepAlive 2 个（intraday-monitor、incremental-worker），定时跑完即退 3 个
+> （daily-after-close 18:30、build-sector-map 09:13、holdings-check 09:45/13:05）。2026-10-13 已将三个一次性下载任务与 open-check `bootout` 停用，plist 归档在
 > `~/Library/LaunchAgents/_archived_20261013/`（可恢复；脚本 `scripts/download_*.py` 与 `~/bin/A股量化-*` 包装保留，补数据时手动续跑即可）。
 > 日常行情增量由常驻 `incremental-worker` 负责，历史下载任务无需常驻。
 
@@ -47,6 +49,19 @@ launchctl kickstart gui/$UID_NUM/com.astock-quant.build-sector-map
 # 查看 / 停用
 launchctl list | grep astock
 launchctl bootout gui/$UID_NUM/com.astock-quant.build-sector-map
+```
+
+### 持仓盯盘任务（holdings-check）
+
+仓库模板 `com.astock-quant.holdings-check.plist` 里的 `WECOM_BOT_WEBHOOK` 是占位符
+（`REPLACE_WITH_YOUR_WECOM_BOT_WEBHOOK`，**凭证不入库**）。首次部署时复制后先填入真实
+webhook（可从本机 `~/Library/LaunchAgents/com.astock-quant.intraday-monitor.plist` 复制同一值），
+再 bootstrap：
+
+```bash
+cp scripts/launchd/com.astock-quant.holdings-check.plist ~/Library/LaunchAgents/
+# 编辑 ~/Library/LaunchAgents/com.astock-quant.holdings-check.plist 把占位符换成真实 webhook
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.astock-quant.holdings-check.plist
 ```
 
 盘中监控红线：9:30–11:30 / 13:00–15:00 不重启 intraday-monitor；重启/部署只在午休或收盘后。

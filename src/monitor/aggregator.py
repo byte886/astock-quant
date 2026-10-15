@@ -7,23 +7,38 @@
 from .config import log
 
 
-def _is_zt_stock(zdf, code):
-    """个股是否触及涨停（按代码前缀区分 20cm / 10cm 涨跌停幅度）。
+def _bare_code(code):
+    """剥离腾讯 spot 的 sh/sz/bj 市场前缀，回到 6 位裸码。"""
+    c = str(code)
+    if len(c) > 6 and c[:2] in ("sh", "sz", "bj"):
+        return c[2:]
+    return c
+
+
+def limit_pct(code):
+    """该股当日涨跌幅停板阈值 %（创业/科创/北交按 20cm，其余 10cm）。
 
     腾讯 spot 返回的 code 带市场前缀（sz300308 / sh688808 / bj830xxx / bj920xxx），
-    判定 20cm 前需先剥离 sh/sz/bj 前缀，否则创业/科创/北交票会落到 10cm 的 9.9%
-    分支而被误计涨停（ISSUES I16）。
-    注：北交所实际涨跌幅为 30%，当前与创业/科创同按 20cm(19.9) 桶处理（已知简化，另记）。
+    判定前需先剥离 sh/sz/bj。注：北交所实际涨跌停为 30%，当前与创业/科创同按
+    20cm(19.9) 桶处理（已知简化，见 ISSUES I16）。
     """
+    return 19.9 if _bare_code(code).startswith(("30", "68", "8", "4", "92")) else 9.9
+
+
+def _is_zt_stock(zdf, code):
+    """个股是否触及涨停（按代码前缀区分 20cm / 10cm 涨跌停幅度）。"""
     import pandas as pd
     if zdf is None or pd.isna(zdf):
         return False
-    c = str(code)
-    if len(c) > 6 and c[:2] in ("sh", "sz", "bj"):  # 剥离市场前缀，回到 6 位裸码
-        c = c[2:]
-    if c.startswith(("30", "68", "8", "4", "92")):  # 创业/科创/北交 20cm
-        return zdf >= 19.9
-    return zdf >= 9.9
+    return zdf >= limit_pct(code)
+
+
+def is_dt_stock(zdf, code):
+    """个股是否触及跌停（与 _is_zt_stock 对称）。"""
+    import pandas as pd
+    if zdf is None or pd.isna(zdf):
+        return False
+    return zdf <= -limit_pct(code)
 
 
 def _new_agg_bucket():

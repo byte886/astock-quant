@@ -137,3 +137,40 @@ def test_snapshot_first_write_starts_with_header():
                            "speed": None, "lb": None, "up": 0, "down": 0}], "tx")
     rows = list(_csv.reader(open(config.SNAP_DIR / "2026-10-16.csv", encoding="utf-8-sig")))
     assert rows[0][0] == "时间" and rows[1][2] == "BK9"   # 全新文件首行必为表头（杀 delete not）
+
+
+# ---- load_fired_boards（持仓盯盘今日已触发板块，需求二 #38）----
+def test_higher_level():
+    assert P._higher_level("L1", "🔴L2") == "L2"
+    assert P._higher_level("L2", "L1") == "L2"   # 已是 L2 不降级
+    assert P._higher_level("L1", "L1") == "L1"
+    assert P._higher_level("L1", "") == "L1"
+
+
+def test_accumulate_fired_aggregates_and_skips_empty():
+    out = {}
+    P._accumulate_fired(out, "半导体", "L1")
+    P._accumulate_fired(out, "半导体", "L2")
+    P._accumulate_fired(out, "半导体", "L1")
+    P._accumulate_fired(out, "", "L1")            # 空板块名忽略
+    assert out == {"半导体": {"count": 3, "level": "L2"}}
+
+
+def test_load_fired_boards_reads_csv(tmp_path, monkeypatch):
+    import csv as _csv
+    f = tmp_path / "2026-01-02.csv"
+    with open(f, "w", encoding="utf-8-sig", newline="") as fh:
+        w = _csv.DictWriter(fh, fieldnames=P.ALERT_COLS)
+        w.writeheader()
+        for lv, nm in [("L1", "半导体"), ("L2", "半导体"), ("L1", "CRO")]:
+            row = {c: "" for c in P.ALERT_COLS}
+            row.update({"级别": lv, "板块名": nm})
+            w.writerow(row)
+    monkeypatch.setattr(P, "ALERT_DIR", tmp_path)
+    assert P.load_fired_boards("2026-01-02") == {
+        "半导体": {"count": 2, "level": "L2"}, "CRO": {"count": 1, "level": "L1"}}
+
+
+def test_load_fired_boards_missing_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "ALERT_DIR", tmp_path)
+    assert P.load_fired_boards("2099-01-01") == {}

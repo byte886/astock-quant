@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  持仓盯盘定时推送（com.astock-quant.holdings-check，需求二 #38）
+
+  每个交易日（周一至周五）09:45 与 13:05 各跑一次 holdings_check.py，跑完即退
+  （非常驻，与盘中板块监控 intraday-monitor 完全解耦，互不影响）。推送一次持仓快照：
+  现价/涨跌幅/量比/涨速，标注涨停/跌停/大跌、3号池⭐，并附带所属板块当日异动。
+
+  部署（在仓库根目录执行）：
+    mkdir -p ~/Library/LaunchAgents
+    cp scripts/launchd/com.astock-quant.holdings-check.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.astock-quant.holdings-check.plist
+  立即手动触发一次验证（只打印不推送先 dry-run 见 scripts/holdings_check.py）：
+    launchctl kickstart gui/$(id -u)/com.astock-quant.holdings-check
+  停用：
+    launchctl bootout gui/$(id -u)/com.astock-quant.holdings-check
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.astock-quant.holdings-check</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/wenjiechen/bin/A股量化-持仓盯盘</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Users/wenjiechen/Desktop/astock-quant</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>WECOM_BOT_WEBHOOK</key>
+		<string>REPLACE_WITH_YOUR_WECOM_BOT_WEBHOOK</string>
+	</dict>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>45</integer></dict>
+		<dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>13</integer><key>Minute</key><integer>5</integer></dict>
+		<dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>45</integer></dict>
+		<dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>13</integer><key>Minute</key><integer>5</integer></dict>
+		<dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>45</integer></dict>
+		<dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>13</integer><key>Minute</key><integer>5</integer></dict>
+		<dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>45</integer></dict>
+		<dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>13</integer><key>Minute</key><integer>5</integer></dict>
+		<dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>45</integer></dict>
+		<dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>13</integer><key>Minute</key><integer>5</integer></dict>
+	</array>
+	<key>StandardOutPath</key>
+	<string>/Users/wenjiechen/Desktop/astock-quant/data/_workspace/holdings_check.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/wenjiechen/Desktop/astock-quant/data/_workspace/holdings_check.log</string>
+</dict>
+</plist>

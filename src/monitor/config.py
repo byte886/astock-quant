@@ -53,6 +53,10 @@ STEP_ZT       = int(_f("MON_STEP_ZT", 2))
 RELAPSE_GRACE_MIN = float(_f("MON_RELAPSE_GRACE_MIN", 10))
 LEADER_LIMIT = int(_f("MON_LEADER_LIMIT", 10))   # 板块推送附带个股明细的最多只数
 LEADER_UP_MIN = _f("MON_LEADER_UP_MIN", 3.0)     # 领涨股（未涨停）最低涨幅%，低于不算领涨
+# ---- 需求二 #38 持仓盯盘定时推送（上午 9:45 / 下午 13:05 各一次）----
+HOLD_DROP_PCT = _f("MON_HOLD_DROP_PCT", -7.0)       # 持仓个股大跌预警线%（低于即预警，跌停另标）
+HOLD_MAX_SHOWN = int(_f("MON_HOLD_MAX_SHOWN", 10))  # 持仓盯盘最多展示只数（防刷屏）
+HOLD_BOARD_STRONG = _f("MON_HOLD_BOARD_STRONG", 2.5)  # 所属板块"当前走强"提示线%
 THRESHOLD_SNAP = (f"chg>{CHG_L1}%|ztL1>={ZT_L1}|ztL2>={ZT_L2}|"
                   f"lb>={LB_L2}|speed>{SPEED_L1}/尾盘{SPEED_LATE}")
 POLL_NORMAL = int(_f("MON_POLL_NORMAL", 60))

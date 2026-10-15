@@ -27,6 +27,7 @@ type = "layers"
 layers = [
   "src.monitor.cli",
   "src.monitor.monitor",
+  "src.monitor.holdings",
   "src.monitor.reconcile",
   "src.monitor.notifier",
   "src.monitor.persistence",
