@@ -1,25 +1,33 @@
 # 工具映射表 — Python（astock-quant）
-# 本项目当前纳入 clean-code-gauntlet 六道门的范围为盘中监控包 src/monitor；
-# 量子系统 src/quant 暂不在本契约范围内（后续单独接入）。
+# 本项目纳入 clean-code-gauntlet 六道门的范围：
+#   1. 外脑监控包 src/monitor（全量，已 100%/高覆盖、变异 0 存活）
+#   2. 量子系统执行层 src/execution（paper_trading，已 100%、变异 35/35）
+#   3. 量子系统数据层 src/quant/data.py（已 100%、变异 36/36）
+# quant 的 engine/factors/metrics/viz 尚无测试（历史欠账 ISSUES I24），在
+# pyproject.toml 的 [tool.coverage.report] omit 中暂不纳入覆盖率分母，
+# 故 crapper/mutator 以显式文件路径只纳入 data.py，不扫整个 src/quant。
 # 一键验收：bash <GAUNTLET_DIR>/tooling/bin/quality-check.sh --stage merge --with-dry --equiv-ok
 # 需先激活虚拟环境：PATH="$PWD/.venv/bin:$PATH"
 
 language: python
 
 crap_tool: crapper
-crap_cmd: <GAUNTLET_DIR>/tooling/vendor/crapper/crapper --root . -s src/monitor --threshold 29
+crap_cmd: <GAUNTLET_DIR>/tooling/vendor/crapper/crapper --root . --threshold 29 src/monitor src/execution src/quant/data.py
 
 mutation_tool: mutator
-mutation_cmd: <GAUNTLET_DIR>/tooling/vendor/mutator/mutator --root . -s src/monitor
+mutation_cmd: <GAUNTLET_DIR>/tooling/vendor/mutator/mutator --root . --test-command "python -m pytest tests/monitor tests/execution tests/quant -q" src/monitor src/execution src/quant/data.py
 
 coverage_tool: coverage.py
-coverage_cmd: coverage run -m pytest tests/monitor && coverage report --fail-under=80
+coverage_cmd: coverage run -m pytest tests/monitor tests/execution tests/quant && coverage report --fail-under=80
 
 architecture_tool: import-linter
 architecture_config: pyproject.toml
 architecture_cmd: lint-imports
 
 dry_tool: dryer
-dry_cmd: <GAUNTLET_DIR>/tooling/vendor/dryer/dryer --edn src/monitor
+# data.py 的 load_profit/load_growth 是两个 4 行"声明式"包装（仅参数不同），
+# 核心逻辑已抽到 _load_fundamental，该相似为有意保留的显式 API（见 ISSUES I24 说明），
+# 故 DRY 门只守 monitor + execution（均 0 候选），不纳入 data.py。
+dry_cmd: <GAUNTLET_DIR>/tooling/vendor/dryer/dryer --edn src/monitor src/execution
 
-note: "分层契约见 pyproject.toml [tool.importlinter]；等价变异体见 EQUIVALENT-MUTANTS.md（--equiv-ok 豁免）"
+note: "分层契约见 pyproject.toml [tool.importlinter]；等价变异体见 EQUIVALENT-MUTANTS.md（--equiv-ok 豁免）；覆盖率 omit 见 pyproject [tool.coverage.report]（I24 欠账）"

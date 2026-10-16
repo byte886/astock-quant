@@ -1,6 +1,8 @@
 # 确定性质量门配置 —— clean-code-gauntlet
-# 默认测试集：外脑监控包 tests/monitor + 量子系统执行层 tests/execution。
-# 覆盖率门覆盖 src/monitor 与 src/execution；两者均为 100%/高覆盖、变异 0 存活。
+# 默认测试集：外脑监控包 tests/monitor + 量子系统执行层 tests/execution + 数据层 tests/quant。
+# 覆盖率门覆盖 src/monitor、src/execution 与量子系统已固化的 data.py（均 100%/高覆盖、
+# 变异 0 存活）；quant 的 engine/factors/metrics/viz 尚无测试（历史欠账，见 ISSUES I24），
+# 暂不纳入分母，待补齐 characterization tests 后再整体纳入 src/quant。
 
 [tool.pytest.ini_options]
 testpaths = ["tests/monitor", "tests/execution", "tests/quant"]
@@ -8,13 +10,22 @@ pythonpath = ["."]
 addopts = "-q"
 
 [tool.coverage.run]
-source = ["src/monitor", "src/execution"]
+source = ["src/monitor", "src/execution", "src/quant"]
 branch = true
 
 [tool.coverage.report]
 fail_under = 80
 show_missing = true
 skip_empty = true
+# quant 中仅 data.py 已补齐 characterization tests（100%、变异 0 存活）；
+# engine/factors/metrics/viz 尚无测试（历史欠账 ISSUES I24），暂不纳入分母，
+# 补齐后删除对应 omit 行即整体纳入 src/quant。
+omit = [
+  "src/quant/engine.py",
+  "src/quant/factors.py",
+  "src/quant/metrics.py",
+  "src/quant/viz.py",
+]
 
 [tool.importlinter]
 # grimp 只接受无点号的顶层包作为 root：src 为顶层包（含 __init__.py），

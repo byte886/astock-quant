@@ -115,36 +115,45 @@ def load_price_panel(codes=None, field="close"):
     return panels
 
 
-def load_profit(code):
-    p = FUND_DIR / "profit" / f"{code}.csv"
-    df = _read_table(p)
+def _load_fundamental(code, subdir, date_cols, num_cols,
+                      sort_col=None, cash_from=None):
+    """读一张"每只一个文件"的财务表（profit/growth/dividend）的公共逻辑。
+
+    缺失文件返回空 DataFrame；date_cols 转日期、num_cols 转数值；
+    cash_from 给定时新增 cash 列（=该列数值，原列保留，分红表用）；
+    sort_col 给定时按其排序（profit/growth 按 pubDate，分红表不排序）。
+    列缺失时与原实现一致地抛出 KeyError（这些表由 akshare 固定列下载）。
+    """
+    df = _read_table(FUND_DIR / subdir / f"{code}.csv")
     if df is None:
         return pd.DataFrame()
-    df["pubDate"] = pd.to_datetime(df["pubDate"], errors="coerce")
-    df["statDate"] = pd.to_datetime(df["statDate"], errors="coerce")
-    df["roeAvg"] = pd.to_numeric(df["roeAvg"], errors="coerce")
-    return df.sort_values("pubDate")
+    for c in date_cols:
+        df[c] = pd.to_datetime(df[c], errors="coerce")
+    for c in num_cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    if cash_from is not None:
+        df["cash"] = pd.to_numeric(df[cash_from], errors="coerce")
+    if sort_col is not None:
+        df = df.sort_values(sort_col)
+    return df
+
+
+def load_profit(code):
+    return _load_fundamental(
+        code, "profit", date_cols=["pubDate", "statDate"],
+        num_cols=["roeAvg"], sort_col="pubDate")
 
 
 def load_growth(code):
-    p = FUND_DIR / "growth" / f"{code}.csv"
-    df = _read_table(p)
-    if df is None:
-        return pd.DataFrame()
-    df["pubDate"] = pd.to_datetime(df["pubDate"], errors="coerce")
-    df["statDate"] = pd.to_datetime(df["statDate"], errors="coerce")
-    df["YOYNI"] = pd.to_numeric(df["YOYNI"], errors="coerce")
-    return df.sort_values("pubDate")
+    return _load_fundamental(
+        code, "growth", date_cols=["pubDate", "statDate"],
+        num_cols=["YOYNI"], sort_col="pubDate")
 
 
 def load_dividend(code):
-    p = FUND_DIR / "dividend" / f"{code}.csv"
-    df = _read_table(p)
-    if df is None:
-        return pd.DataFrame()
-    df["dividOperateDate"] = pd.to_datetime(df["dividOperateDate"], errors="coerce")
-    df["cash"] = pd.to_numeric(df["dividCashPsBeforeTax"], errors="coerce")
-    return df
+    return _load_fundamental(
+        code, "dividend", date_cols=["dividOperateDate"],
+        num_cols=[], cash_from="dividCashPsBeforeTax")
 
 
 def load_benchmark():
@@ -159,7 +168,14 @@ def load_benchmark():
 
 
 def month_end_dates(dates, start="2015-01-01"):
-    """给定交易日索引，返回每月最后一个交易日（>= start）。"""
+    """给定**完整历史**交易日索引，批量返回每月最后一个交易日（>= start）。
+
+    仅用于回测：回测面板是完整历史，按 (年,月) 分组取最大即当月最后交易日。
+    注意它会把序列最后一天也当成其所在月的月末（即使该月数据不完整）；
+    回测引擎只用 ``mends[:-1]`` 作信号日（最后一个月末没有下一交易日可成交），
+    故该边界不影响结果。每日实盘推进（数据面板在最新交易日截断、未来未知）
+    不要用它，改用 :func:`is_month_end_trade_date`（真实交易日历，治 I23）。
+    """
     s = pd.Series(dates, index=dates)
     grp = s.groupby([dates.year, dates.month]).max()
     me = pd.DatetimeIndex(grp.values)

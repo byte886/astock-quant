@@ -15,6 +15,26 @@ os.environ["MON_ROOT"] = _TEST_ROOT
 import pytest  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _isolate_workspace():
+    """每个测试前清空隔离 MON_ROOT 下的落盘目录，杜绝测试间文件污染。
+
+    所有 monitor 测试共享同一个进程级 _TEST_ROOT；若不逐测试清理，使用
+    ``datetime.now()``（"今天"）落盘的测试会与写死"今天"日期的测试
+    （如快照首行表头）撞同一文件，导致断言失败。
+    """
+    import shutil
+    from pathlib import Path
+    from src.monitor import config
+    data_dir = Path(_TEST_ROOT) / "data"
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    for d in (config.WORKSPACE, config.ALERT_DIR, config.SNAP_DIR,
+              config.DIFF_DIR):
+        d.mkdir(parents=True, exist_ok=True)
+    yield
+
+
 @pytest.fixture()
 def fake_akshare(monkeypatch):
     """注入一个假的 akshare 模块（测试按需往里面塞属性）。"""
