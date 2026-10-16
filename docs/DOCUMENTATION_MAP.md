@@ -42,12 +42,13 @@
 4. 跨会话稳定结论：（工程记忆暂未启用，需要时查 ADR）
 
 ### 常驻后台任务（launchd）
-> **当前常驻 4 个，权威清单见 [`scripts/launchd/README.md`](../scripts/launchd/README.md)**（含部署/停用命令）。AI 接手先 `launchctl list | grep astock` 核对实际进程。
-1. `intraday-monitor`：外脑盘中板块异动监控，9:30–15:00 扫描并企微推送
-2. `build-sector-map`：盘前周一至五 09:13 预建当日板块成分映射（防开盘盲区）
-3. `incremental-worker`：量子系统盘后 15:05 起每日行情增量补数（常驻）
-4. `daily-after-close`：周一至五 18:30 收盘后推进模拟盘
-5. 已停用归档（2026-10-13）：`download-data`/`download-monitor`/`fundamentals`/`open-check`，plist 在 `~/Library/LaunchAgents/_archived_20261013/`，脚本保留可手动续跑（fundamentals 尚差约 93 只，跑月度多因子前补）
+> **当前长期任务 5 个（2 个常驻 KeepAlive + 3 个定时跑完即退），权威清单见 [`scripts/launchd/README.md`](../scripts/launchd/README.md)**（含部署/停用命令）。AI 接手先 `launchctl list | grep astock` 核对实际进程。
+1. `intraday-monitor`：外脑盘中板块异动监控（常驻 KeepAlive），9:30–11:30/13:00–15:00 扫描并企微推送
+2. `incremental-worker`：量子系统盘后 15:05 起每日行情增量补数（常驻 KeepAlive）
+3. `build-sector-map`：盘前周一至五 09:13 预建当日板块成分映射（定时，防开盘盲区）
+4. `holdings-check`：周一至五 09:45/13:05 持仓盯盘快照推送（定时，需求二 #38）
+5. `daily-after-close`：周一至五 18:30 收盘后推进模拟盘（定时，仅模拟盘，数据增量已交 worker）
+6. 已停用归档（2026-10-13）：`download-data`/`download-monitor`/`fundamentals`/`open-check`，plist 在 `~/Library/LaunchAgents/_archived_20261013/`，脚本保留可手动续跑（fundamentals 尚差约 93 只，跑月度多因子前补）
 
 ### 数据下载与管理
 1. 历史补下载：`scripts/download_data.py`（baostock 日线/5分钟，断点续传）——历史已 100% 下完、launchd 任务已归档停用；流程见 `docs/WORKFLOW.md` 阶段①，口径见 `docs/数据资产清单.md`
@@ -166,10 +167,7 @@
 | 数据下载 | `scripts/download_data.py` | Baostock 个股日线/5分钟，前复权、断点续传、防限流（历史已 100% 下完，launchd 任务 2026-10-13 归档停用，手动续跑用） |
 | 数据下载 | `scripts/download_monitor.py` | download_data 的看门狗（launchd 自愈巡检），随主任务 2026-10-13 归档停用 |
 | 数据下载 | `scripts/download_fundamentals.py` | 中证800 财务三表（profit/growth/dividend）；已下 707/约800，launchd 任务归档，跑月度多因子前补约 93 只 |
-| 数据下载 | `scripts/download_csi800_daily.py` | 中证800 成分日线补齐 |
-| 数据下载 | `scripts/download_etf.py` / `download_etf_akshare.py` / `download_etf_playwright.py` | ETF 行情多通道（baostock/akshare/浏览器兜底）；akshare 东财失败自动回退新浪源、失败返回 rc=1 |
-| 数据下载 | `scripts/update_daily_after_close.py` | 盘后增量补个股日线（`--codes/--lookback`，幂等扫描，失败 exit 1） |
-| 数据探测 | `scripts/probe_fundamental_data.py` | 财务数据字段/可用性探测 |
+| 数据下载 | `scripts/download_etf.py` / `download_etf_akshare.py` | ETF 行情手动补数（baostock 全量 / akshare 东财完整历史并在东财失败时自动回退新浪源、失败返回 rc=1）；日常增量由 incremental-worker 内联复刻 baostock 口径，不经这两个脚本 |
 | 数据探测 | `scripts/probe_external_data.py` | akshare 外部通道探测（东财 datacenter/push2、新浪资金流/ETF、同花顺行业概念；SIGALRM 超时，报告 results/external_data_probe/） |
 | 回测 | `scripts/run_multifactor_backtest.py` | 多因子回测（`--factor value/growth/both --top 15 --start`） |
 | 回测 | `scripts/backtest_etf_rotation.py` | ETF 轮动回测 |
@@ -177,14 +175,13 @@
 | 研究验证 | `scripts/bench_scan_engines.py` | 扫描引擎三方案基准（pandas/DuckDB/Polars，在自有日线 Parquet 上测 L1捞数/L2分组指标/L3形态时序/L4横截面，独立子进程测耗时内存并交叉校验），ADR-005 证据，结果落 results/engine_benchmark/ |
 | 模拟盘 | `scripts/run_paper_trading.py` | 价值策略模拟盘（建仓首跑 + 日常增量推进：T日盘后信号、T+1开盘成交、收盘盯市、月末新信号） |
 | 模拟盘 | `src/execution/paper_trading.py` | 模拟盘账户/撮合/成本引擎（佣金万2.5+卖出印花税千1+滑点千1） |
-| 测试 | `tests/test_paper_trading_daily.py` | 模拟盘日常逻辑自检（信号日不成交/T+1开盘成交/幂等/月末新信号四场景，标准库无依赖） |
-| 自动化 | `scripts/daily_after_close.sh` | 盘后编排三步（增量补日线→ETF基准补记→模拟盘推进），launchd 周一至五 18:30 触发（T27.2） |
+| 测试 | `tests/execution/`（test_paper_trading 15 例 + flow 5 例）、`tests/quant/`（test_data_calendar 12 例 + test_data_loading 25 例） | 模拟盘撮合/现金/100股整手/月末口径与数据层行为刻画测试；paper_trading.py 与 data.py 覆盖率 100%、变异 0 存活（engine/factors/metrics/viz 欠账见 I24） |
+| 自动化 | `scripts/daily_after_close.sh` | 盘后编排（**仅推进模拟盘**；数据增量已统一交常驻 incremental-worker，避免同账号 baostock 并发挂起 W3），launchd 周一至五 18:30 触发 |
 | 外脑 | `scripts/pool3_scan.py` | 3号池扫描器（量比/TRIX/位置/突破/试盘，1/2号评级） |
 | 外脑 | `scripts/scan_operator_sessions.py` | 操盘手其它任务窗口增量采集（游标续读，见增量采集SOP） |
 | 外脑 | `scripts/session_history.py` | 单会话历史导出（早期版，跨会话优先用 local-trajectory-recall 技能） |
 | 舆情(C2挂起) | `scripts/fetch_guba_sentiment.py` / `analyze_guba_sentiment.py` / `verify_sentiment_contrarian.py` | 股吧发帖采集/情绪指数/反向指标验证（单维度已证不稳健） |
 | 项目维护 | `scripts/doc_health_check.py` | 文档健康度体检（断链/空目录/登记覆盖/数据误入git），提交前跑 |
-| 自动化 | `scripts/auto_run_when_ready.py` | 数据就绪后自动触发回测/扫描 |
 | 盘中监控 | `scripts/intraday_sector_monitor.py`（**薄入口**，逻辑在 `src/monitor/` 包） | 盘中板块异动监测（launchd 常驻，`--once` 试跑/`--build-map` 建映射）：东财 push2(curl) 主 → 腾讯个股聚合兜底 → 东财涨停池 → 新浪备份，L1/L2 两级 + 波次状态机触发企微推送；含增强状态机/防静默三道/双源对账；已接交易日历自动休眠；留痕 `data/intraday_alerts/`、快照 `data/_workspace/snapshots/`、对账 `data/_workspace/source_diff/`；测试 `tests/monitor/`；**实现与坑见《上线说明》v2，质量门见 ADR-007** |
 | 盘中监控 | `scripts/query_alerts.py` | 盘中异动预警留痕查询（`--date/--level/--board`） |
 
