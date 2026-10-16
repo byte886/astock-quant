@@ -7,7 +7,8 @@ import pytest
 from src.monitor.aggregator import (_is_zt_stock, tx_board_agg, _new_agg_bucket,
                                     _accumulate_price, _accumulate_volume,
                                     _accumulate_tx_row, _boards_from_buckets,
-                                    _redundant_level_tags, board_stock_detail)
+                                    _redundant_level_tags, _generic_concept_tags,
+                                    _board_tags, board_stock_detail)
 
 
 # 无前缀 6 位码：startswith 能正确进入 20cm 分支（刻画函数本身的分支逻辑）
@@ -146,6 +147,53 @@ def test_tx_board_agg_keeps_distinct_level_and_concept():
     assert {"游戏Ⅱ", "游戏Ⅲ", "影视Ⅲ", "AI"} <= names
 
 
+# ---------------- 泛化概念板块过滤（融资融券/基金重仓/百元股等不参与聚合） ----------------
+def test_generic_concept_tags_collected_real_kept():
+    mapping = {
+        "sh600001": ["concept:融资融券", "concept:机器人", "industry:元件"],
+        "sh600002": ["concept:基金重仓", "concept:PCB"],
+    }
+    drop = _generic_concept_tags(mapping)
+    assert "融资融券" in drop and "基金重仓" in drop
+    assert "机器人" not in drop and "PCB" not in drop
+    assert "元件" not in drop               # 行业（industry:）一律不收进丢弃集合
+
+
+def test_generic_concept_tags_empty_when_switch_on(monkeypatch):
+    monkeypatch.setattr("src.monitor.aggregator.MON_INCLUDE_GENERIC", True)
+    mapping = {"sh600001": ["concept:融资融券", "concept:百元股"]}
+    assert _generic_concept_tags(mapping) == set()    # 回滚开关打开：保留全部
+
+
+def test_board_tags_filters_levels_and_generic():
+    tags = ["industry:游戏Ⅱ", "industry:游戏Ⅲ", "concept:融资融券", "concept:PCB"]
+    assert _board_tags(tags, {"游戏Ⅲ"}, {"融资融券"}) == [
+        "industry:游戏Ⅱ", "concept:PCB"]
+    assert _board_tags(tags, set(), set()) == tags   # 丢弃集合为空时原样返回
+
+
+def test_tx_board_agg_filters_generic_concept():
+    mapping = {
+        "sh600001": ["concept:融资融券", "concept:机器人"],
+        "sh600002": ["concept:融资融券", "concept:机器人"],
+    }
+    df = pd.DataFrame([
+        {"code": "sh600001", "zdf": 4.0, "lb": 1.0, "speed": 1.0},
+        {"code": "sh600002", "zdf": 2.0, "lb": 1.0, "speed": 1.0},
+    ])
+    names = {b["name"] for b in tx_board_agg(mapping, df)}
+    assert "融资融券" not in names          # 泛化标签不聚合、不触发
+    assert "机器人" in names               # 真概念正常聚合
+
+
+def test_tx_board_agg_includes_generic_when_switch_on(monkeypatch):
+    monkeypatch.setattr("src.monitor.aggregator.MON_INCLUDE_GENERIC", True)
+    mapping = {"sh600001": ["concept:融资融券"]}
+    df = pd.DataFrame([{"code": "sh600001", "zdf": 4.0, "lb": 1.0, "speed": 1.0}])
+    names = {b["name"] for b in tx_board_agg(mapping, df)}
+    assert "融资融券" in names             # 一键回滚：开关打开后回到全量
+
+
 def test_bucket_helpers():
     a = _new_agg_bucket()
     _accumulate_price(a, 10.0, "sh600001")
@@ -266,6 +314,28 @@ def test_board_stock_detail_up_min_threshold():
                              _detail_spot(), _WATCH, up_min=6.0)
     leaders = [s["code"] for s in out if not s["is_zt"]]
     assert leaders == ["sh600584", "sz002463"]
+
+
+def test_board_stock_detail_drops_nan_zdf_leaders():
+    # 涨幅为 NaN 的票不得进入领涨名单（None/NaN 守卫 or 不可被变异为 and）
+    spot = pd.DataFrame([
+        {"code": "sh600584", "name": "长电科技", "zdf": float("nan")},
+        {"code": "sz002463", "name": "沪电股份", "zdf": 6.5},
+    ])
+    out = board_stock_detail("元件", _detail_zt(), _detail_mapping(), spot, set())
+    leaders = [s["code"] for s in out if not s["is_zt"]]
+    assert "sh600584" not in leaders and "sz002463" in leaders
+
+
+def test_board_stock_detail_leader_boundary_is_inclusive():
+    # 恰好等于门槛（3.0%）的票应保留——语义"涨幅≥门槛"，< 不可被变异为 <=
+    spot = pd.DataFrame([
+        {"code": "sh600584", "name": "长电科技", "zdf": 3.0},
+        {"code": "sz002463", "name": "沪电股份", "zdf": 2.9},
+    ])
+    out = board_stock_detail("元件", _detail_zt(), _detail_mapping(), spot, set())
+    leaders = [s["code"] for s in out if not s["is_zt"]]
+    assert "sh600584" in leaders and "sz002463" not in leaders
 
 
 def test_board_stock_detail_spot_missing_or_empty_mapping_only_zt():

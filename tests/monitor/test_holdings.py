@@ -171,6 +171,48 @@ def test_collect_moves_fired_without_zt():
     assert len(lines) == 1 and "今日L1·1次" in lines[0] and "涨停" not in lines[0]
 
 
+def test_build_holdings_filters_generic_concept_even_if_fired():
+    # 泛化概念（融资融券）即便今日真实触发、行情很强，也不在持仓盯盘里复活；
+    # 真概念（机器人）正常保留。
+    spot = _spot([["sh600000", "浦发银行", 10.0, 1.0, 1.0, 0.1]])
+    mapping = {"sh600000": ["industry:银行", "concept:融资融券", "concept:机器人"]}
+    agg = [{"name": "银行", "chg": 0.2, "zt": 0},
+           {"name": "融资融券", "chg": 4.5, "zt": 4},
+           {"name": "机器人", "chg": 4.8, "zt": 3}]
+    fired = {"融资融券": {"count": 1, "level": "L1"},
+             "机器人": {"count": 1, "level": "L1"}}
+    rows, _ = H.build_holdings({"sh600000": "浦发"}, {}, spot, mapping, agg, fired)
+    moves = "\n".join(H.collect_board_moves(rows))
+    assert "融资融券" not in moves
+    assert "机器人" in moves
+
+
+def test_collect_moves_fired_first_then_chg_desc_and_cap():
+    boards = [
+        {"name": "F1", "chg": 3.0, "zt": 0, "fired": {"count": 1, "level": "L1"}},
+        {"name": "F2", "chg": 1.0, "zt": 0, "fired": {"count": 2, "level": "L2"}},
+    ]
+    boards += [{"name": f"S{i}", "chg": 2.5 + i, "zt": 0, "fired": None}
+               for i in range(10)]
+    moves = H.collect_board_moves([{"name": "甲", "boards": boards}])
+    assert len(moves) == H.HOLD_BOARD_MAX_MOVES == 10
+    assert moves[0].startswith("· F1") and moves[1].startswith("· F2")  # 今日已触发优先
+    assert "S9" in moves[2] and "S2" in moves[9]                        # 其余按涨幅降序取前8
+    assert "S0" not in "\n".join(moves) and "S1" not in "\n".join(moves)
+
+
+def test_move_sort_key_none_chg_is_negative_infinity():
+    # 同一"已触发"组内：涨幅缺失（None）视为负无穷，必须排在有涨幅板块之后
+    fired = {"count": 1, "level": "L1"}
+    k_none = H._move_sort_key(("NULL", {"fired": fired, "chg": None}))
+    k_low = H._move_sort_key(("LOW", {"fired": fired, "chg": 0.1}))
+    k_high = H._move_sort_key(("HIGH", {"fired": fired, "chg": 5.0}))
+    assert k_high < k_low < k_none                    # 降序：高涨幅在前，None 垫后
+    # 但"已触发"仍是第一排序键：涨幅再高的未触发板块，也排在已触发的 None 之后
+    k_quiet = H._move_sort_key(("Q", {"fired": None, "chg": 9.0}))
+    assert k_none < k_quiet
+
+
 # ---------------- 取数编排（mock 掉全部 IO） ----------------
 def _patch_io(monkeypatch, push_calls, spot=None, holdings=None):
     monkeypatch.setattr(H, "load_csv_codes", lambda path:
@@ -210,6 +252,16 @@ def test_run_once_no_holdings_skips(monkeypatch):
               holdings={})
     assert H.run_once() == (None, None)
     assert calls == []
+
+
+def test_run_once_logs_full_body_even_when_not_push(monkeypatch, capsys):
+    calls = []
+    _patch_io(monkeypatch, calls, spot=[["sh600000", "浦发", 10.0, 1.0, 1.0, 0.1]])
+    H.run_once(push=False)                    # dry-run 不推送，但完整正文也要落日志
+    out = capsys.readouterr().out
+    assert calls == []
+    assert "[holdings] 本次盯盘正文（push=False）" in out
+    assert "浦发" in out and "持仓盯盘" in out
 
 
 def test_main_dry_prints_and_passes_push_false(monkeypatch, capsys):

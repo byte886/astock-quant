@@ -19,7 +19,8 @@ import pandas as pd
 
 from .aggregator import _is_zt_stock, is_dt_stock, tx_board_agg
 from .codes import load_csv_codes, default_holdings_path, default_pool_path
-from .config import (HOLD_DROP_PCT, HOLD_MAX_SHOWN, HOLD_BOARD_STRONG, log)
+from .config import (HOLD_DROP_PCT, HOLD_MAX_SHOWN, HOLD_BOARD_STRONG,
+                     HOLD_BOARD_MAX_MOVES, is_generic_concept, MON_INCLUDE_GENERIC, log)
 from .datasources import tx_spot, build_sector_map
 from .persistence import load_fired_boards
 from . import notifier
@@ -83,7 +84,8 @@ def _stock_boards(tags, board_by_name, fired):
     views = [_board_view(nm, board_by_name, fired)
              for nm in _tag_names(tags, "industry:")]
     views += [_board_view(nm, board_by_name, fired)
-              for nm in _tag_names(tags, "concept:") if nm in fired]
+              for nm in _tag_names(tags, "concept:")
+              if nm in fired and (MON_INCLUDE_GENERIC or not is_generic_concept(nm))]
     return views
 
 
@@ -166,9 +168,24 @@ def _format_move(nm, e):
     return (head + (" " + tail if tail else "")).rstrip()
 
 
+def _move_sort_key(item):
+    """板块异动排序键：今日已真实推送（fired）的优先；其次当前涨幅降序；最后板块名稳定。
+
+    涨幅缺失（None）视为负无穷排最后，保证有真实行情的板块排前面。
+    """
+    nm, e = item
+    fired_first = 0 if e.get("fired") is not None else 1
+    chg = e.get("chg")
+    return (fired_first, -(chg if chg is not None else -1e9), nm)
+
+
 def collect_board_moves(rows):
-    """汇总持仓所属板块中值得提示的板块，按板块名去重，返回文案行。"""
-    return [_format_move(nm, e) for nm, e in _merge_boards(rows).items()]
+    """汇总持仓所属板块中值得提示的板块：按板块名去重、相关度排序、限量后返回文案行。
+
+    最多 HOLD_BOARD_MAX_MOVES 条（防刷屏）；排序见 _move_sort_key。
+    """
+    items = sorted(_merge_boards(rows).items(), key=_move_sort_key)
+    return [_format_move(nm, e) for nm, e in items[:HOLD_BOARD_MAX_MOVES]]
 
 
 # ---------------- 渲染 ----------------
@@ -234,6 +251,8 @@ def run_once(push=True):
     content = format_holdings(rows, missing)
     if push and content:
         notifier.push(title, content)
+    if content:
+        log(f"[holdings] 本次盯盘正文（push={push}）：\n{title}\n{content}")
     return title, content
 
 

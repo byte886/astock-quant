@@ -48,6 +48,39 @@ def test_em_boards_fail(monkeypatch):
     assert DS.em_boards("concept") is None
 
 
+def _em_named(names):
+    return json.dumps({"data": {"diff": [
+        {"f12": f"BK{i}", "f14": nm, "f3": 3.0, "f6": 1e9,
+         "f10": 1.0, "f22": 1.0, "f104": 5, "f105": 2}
+        for i, nm in enumerate(names)]}})
+
+
+def test_em_boards_concept_filters_generic(monkeypatch):
+    monkeypatch.setattr(DS.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(
+                            stdout=_em_named(["融资融券", "机器人概念", "百元股", "PCB"])))
+    got = [r["name"] for r in DS.em_boards("concept")]
+    assert got == ["机器人概念", "PCB"]          # 泛化标签被滤、真概念保留、顺序稳定
+
+
+def test_em_boards_industry_not_filtered(monkeypatch):
+    # 行业分支（kind=industry）绝不套用概念泛化过滤，即便名字撞表也原样返回
+    monkeypatch.setattr(DS.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(
+                            stdout=_em_named(["元件", "证券Ⅱ", "百元股"])))
+    got = [r["name"] for r in DS.em_boards("industry")]
+    assert got == ["元件", "证券Ⅱ", "百元股"]
+
+
+def test_em_boards_concept_keeps_generic_when_switch_on(monkeypatch):
+    monkeypatch.setattr(DS, "MON_INCLUDE_GENERIC", True)
+    monkeypatch.setattr(DS.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(
+                            stdout=_em_named(["融资融券", "机器人概念"])))
+    got = [r["name"] for r in DS.em_boards("concept")]
+    assert got == ["融资融券", "机器人概念"]        # 一键回滚：开关打开后回到全量
+
+
 # ---------------- 腾讯 / 涨停池 / 新浪 ----------------
 def test_tx_spot_ok_and_fail(fake_akshare):
     fake_akshare.stock_zh_a_spot_tx = lambda: pd.DataFrame({"code": ["sh600001"]})

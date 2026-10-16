@@ -4,7 +4,7 @@
 纯计算为主（仅在整体失败时记日志），补齐东财 push2 缺失时新浪兜底没有的
 涨停数/量比/涨速/上涨占比，使 L1/L2 在腾讯兜底数据源下也能完整触发。
 """
-from .config import log
+from .config import log, is_generic_concept, MON_INCLUDE_GENERIC
 
 
 def _bare_code(code):
@@ -107,17 +107,15 @@ def tx_board_agg(mapping, tx_df):
         for col in ("zdf", "lb", "speed"):
             tx_df[col] = pd.to_numeric(tx_df[col], errors="coerce")
         drop_levels = _redundant_level_tags(mapping)
+        drop_generic = _generic_concept_tags(mapping)
         board_agg = {}
         for _, row in tx_df.iterrows():
             code = row["code"]
             tags = mapping.get(code)
             if not tags:
                 continue
-            if drop_levels:
-                tags = [t for t in tags
-                        if not (t.startswith("industry:")
-                                and t.partition(":")[2] in drop_levels)]
-            _accumulate_tx_row(board_agg, code, tags, row)
+            _accumulate_tx_row(board_agg, code,
+                              _board_tags(tags, drop_levels, drop_generic), row)
         return _boards_from_buckets(board_agg)
     except Exception as e:
         log(f"[tx_agg] 聚合失败：{type(e).__name__}")
@@ -145,6 +143,40 @@ def _redundant_level_tags(mapping):
             if members.get(lvl2) == codes:
                 drop.add(name)
     return drop
+
+
+def _generic_concept_tags(mapping):
+    """收集映射中应剔除的"非题材泛化概念"标签名集合（如融资融券/基金重仓/百元股）。
+
+    与 _redundant_level_tags 同范式，只收 concept: 前缀（industry 一律不动）。
+    回滚开关 MON_INCLUDE_GENERIC=1 时返回空集（保留全部）。
+    """
+    if MON_INCLUDE_GENERIC:
+        return set()
+    drop = set()
+    for tags in (mapping or {}).values():
+        for t in tags or []:
+            if t.startswith("concept:"):
+                nm = t.partition(":")[2]
+                if is_generic_concept(nm):
+                    drop.add(nm)
+    return drop
+
+
+def _board_tags(tags, drop_levels, drop_generic):
+    """剔除"成分完全重复的冗余细分行业"与"非题材泛化概念"后的成分标签。
+
+    行业按 drop_levels（Ⅱ/Ⅲ 重复）、概念按 drop_generic（泛化标签）分别剔除，
+    两类前缀互不干扰；丢弃集合为空时原样返回。
+    """
+    out = []
+    for t in tags or []:
+        if t.startswith("industry:") and t.partition(":")[2] in drop_levels:
+            continue
+        if t.startswith("concept:") and t.partition(":")[2] in drop_generic:
+            continue
+        out.append(t)
+    return out
 
 
 def _belongs_to_board(tags, board_name):

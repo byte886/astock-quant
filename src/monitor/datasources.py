@@ -14,7 +14,8 @@ import threading
 import subprocess
 from datetime import datetime, time as dtime
 
-from .config import (WORKSPACE, TRADE_CAL, EM_HEADERS, num, log)
+from .config import (WORKSPACE, TRADE_CAL, EM_HEADERS, num, log,
+                     is_generic_concept, MON_INCLUDE_GENERIC)
 from .codes import normalize_code
 
 
@@ -37,6 +38,8 @@ def em_boards(kind="concept"):
                 "lb": num(r.get("f10")), "speed": num(r.get("f22")),
                 "up": num(r.get("f104")), "down": num(r.get("f105")),
             })
+        if kind == "concept" and not MON_INCLUDE_GENERIC:
+            rows = [r for r in rows if not is_generic_concept(r.get("name"))]
         return rows
     except Exception as e:
         log(f"[em_boards:{kind}] 失败（降级）：{type(e).__name__}")
